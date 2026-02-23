@@ -5,11 +5,19 @@ import { useAuth } from './AuthContext';
 const API = '/api';
 
 export default function SettingsPage() {
-  const { authFetch, isAdmin } = useAuth();
+  const { authFetch, isAdmin, user: currentUser } = useAuth();
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [users, setUsers] = useState([]);
+  const [userError, setUserError] = useState('');
+  const [createUsername, setCreateUsername] = useState('');
+  const [createPassword, setCreatePassword] = useState('');
+  const [createRole, setCreateRole] = useState('user');
+  const [editingUser, setEditingUser] = useState(null);
+  const [editPassword, setEditPassword] = useState('');
+  const [editRole, setEditRole] = useState('user');
   const [form, setForm] = useState({
     site_title: '',
     accent_color: '',
@@ -38,6 +46,90 @@ export default function SettingsPage() {
       }
     })();
   }, []);
+
+  const fetchUsers = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API}/auth/users`);
+      if (!res.ok) throw new Error('Failed to load users');
+      const data = await res.json();
+      setUsers(data);
+    } catch (err) {
+      setUserError(err.message);
+    }
+  }, [authFetch]);
+
+  useEffect(() => {
+    if (isAdmin) fetchUsers();
+  }, [isAdmin, fetchUsers]);
+
+  const handleCreateUser = async (e) => {
+    e.preventDefault();
+    setUserError('');
+    if (!createUsername.trim() || !createPassword) {
+      setUserError('Username and password required');
+      return;
+    }
+    try {
+      const res = await authFetch(`${API}/auth/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: createUsername.trim(), password: createPassword, role: createRole }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || 'Failed to create user');
+      setCreateUsername('');
+      setCreatePassword('');
+      setCreateRole('user');
+      await fetchUsers();
+    } catch (err) {
+      setUserError(err.message);
+    }
+  };
+
+  const handleUpdateUser = async (e) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    setUserError('');
+    try {
+      const body = {};
+      if (editPassword) body.password = editPassword;
+      if (editRole) body.role = editRole;
+      if (Object.keys(body).length === 0) {
+        setEditingUser(null);
+        return;
+      }
+      const res = await authFetch(`${API}/auth/users/${encodeURIComponent(editingUser)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data?.detail || 'Failed to update');
+      }
+      setEditingUser(null);
+      setEditPassword('');
+      setEditRole('user');
+      await fetchUsers();
+    } catch (err) {
+      setUserError(err.message);
+    }
+  };
+
+  const handleDeleteUser = async (username) => {
+    if (!window.confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+    setUserError('');
+    try {
+      const res = await authFetch(`${API}/auth/users/${encodeURIComponent(username)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data?.detail || 'Failed to delete');
+      }
+      await fetchUsers();
+    } catch (err) {
+      setUserError(err.message);
+    }
+  };
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -200,6 +292,87 @@ export default function SettingsPage() {
           {saving ? 'Saving...' : 'Save settings'}
         </button>
       </form>
+
+      <div style={{ borderTop: '1px solid var(--border)', marginTop: 40, paddingTop: 32 }}>
+        <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>User management</h2>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: 20, fontSize: 14 }}>
+          Create and manage user, moderator, and admin accounts. Users can view; moderators and admins can edit brackets.
+        </p>
+        {userError && (
+          <div style={{ padding: 12, marginBottom: 16, background: 'rgba(239,68,68,0.15)', border: '1px solid var(--error)', borderRadius: 'var(--radius-sm)', color: 'var(--error)' }}>
+            {userError}
+          </div>
+        )}
+        <form onSubmit={handleCreateUser} style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end', marginBottom: 16 }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-muted)' }}>Username</label>
+              <input type="text" value={createUsername} onChange={(e) => setCreateUsername(e.target.value)} placeholder="username" style={{ padding: '8px 12px', width: 140 }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-muted)' }}>Password</label>
+              <input type="password" value={createPassword} onChange={(e) => setCreatePassword(e.target.value)} placeholder="••••••••" style={{ padding: '8px 12px', width: 140 }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-muted)' }}>Role</label>
+              <select value={createRole} onChange={(e) => setCreateRole(e.target.value)} style={{ padding: '8px 12px', width: 120 }}>
+                <option value="user">User</option>
+                <option value="moderator">Moderator</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            <button type="submit" className="primary" disabled={!createUsername.trim() || !createPassword}>
+              Create user
+            </button>
+          </div>
+        </form>
+        <div style={{ background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: 'var(--bg-elevated)' }}>
+                <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Username</th>
+                <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Role</th>
+                <th style={{ padding: '10px 14px', textAlign: 'right', fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.username} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ padding: '10px 14px', color: 'var(--text-primary)' }}>{u.username}</td>
+                  <td style={{ padding: '10px 14px' }}>
+                    {editingUser === u.username ? (
+                      <select value={editRole} onChange={(e) => setEditRole(e.target.value)} style={{ padding: '4px 8px', fontSize: 13 }}>
+                        <option value="user">user</option>
+                        <option value="moderator">moderator</option>
+                        <option value="admin">admin</option>
+                      </select>
+                    ) : (
+                      <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{u.role}</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '10px 14px', textAlign: 'right' }}>
+                    {editingUser === u.username ? (
+                      <>
+                        <input type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="New password" style={{ padding: '4px 8px', width: 120, marginRight: 8 }} />
+                        <button onClick={handleUpdateUser} style={{ padding: '4px 10px', fontSize: 12, marginRight: 6 }}>Save</button>
+                        <button onClick={() => { setEditingUser(null); setEditPassword(''); setEditRole('user'); }} style={{ padding: '4px 10px', fontSize: 12 }}>Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button onClick={() => { setEditingUser(u.username); setEditRole(u.role); setEditPassword(''); }} style={{ padding: '4px 10px', fontSize: 12, marginRight: 6 }}>Edit</button>
+                        {u.username !== currentUser?.username && (
+                          <button onClick={() => handleDeleteUser(u.username)} style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}>Delete</button>
+                        )}
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <p style={{ marginTop: 24 }}>
         <Link to="/" style={{ color: 'var(--accent)' }}>← Back to brackets</Link>
       </p>
