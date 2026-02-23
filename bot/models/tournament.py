@@ -10,6 +10,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from bot.models.base import Base
 
 
+# Supported formats: 1v1, 2v2, 3v3, 4v4, or custom (e.g. "custom: 4v4")
+def parse_format_players(format_str: str) -> int:
+    """Return number of players per side (1 for 1v1, 2 for 2v2, etc.)."""
+    import re
+    m = re.search(r"(\d+)v\d+", format_str, re.I)
+    return int(m.group(1)) if m else 2
+
+
 # rlapi PlaylistKey values
 MMR_PLAYLISTS = {
     "solo_duel": 10,
@@ -45,4 +53,7 @@ class Tournament(Base):
     )
     brackets = relationship(
         "Bracket", back_populates="tournament", cascade="all, delete-orphan"
+    )
+    manual_entries = relationship(
+        "TournamentManualEntry", back_populates="tournament", cascade="all, delete-orphan"
     )

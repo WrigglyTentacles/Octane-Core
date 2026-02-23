@@ -37,9 +37,15 @@ class BracketMatch(Base):
     team2_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id"), nullable=True)
     player1_id: Mapped[Optional[int]] = mapped_column(ForeignKey("players.discord_id"), nullable=True)
     player2_id: Mapped[Optional[int]] = mapped_column(ForeignKey("players.discord_id"), nullable=True)
+    manual_entry1_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tournament_manual_entries.id"), nullable=True)
+    manual_entry2_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tournament_manual_entries.id"), nullable=True)
     winner_team_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id"), nullable=True)
     winner_player_id: Mapped[Optional[int]] = mapped_column(ForeignKey("players.discord_id"), nullable=True)
+    winner_manual_entry_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tournament_manual_entries.id"), nullable=True)
     parent_match_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bracket_matches.id"), nullable=True)
     parent_match_slot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bracket_section: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # winners, losers, grand_finals
+    loser_advances_to_match_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bracket_matches.id"), nullable=True)
+    loser_advances_to_slot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     bracket = relationship("Bracket", back_populates="matches")

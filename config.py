@@ -36,3 +36,10 @@ def _parse_role_ids(value: str) -> set[int]:
 
 MODERATOR_ROLE_IDS = _parse_role_ids(os.getenv("MODERATOR_ROLE_IDS", ""))
 ADMIN_ROLE_IDS = _parse_role_ids(os.getenv("ADMIN_ROLE_IDS", ""))
+
+# Web auth (JWT secret, initial admin bootstrap)
+JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production-use-long-random-string")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_DAYS = 7
+INITIAL_ADMIN_USERNAME = os.getenv("INITIAL_ADMIN_USERNAME", "admin")
+INITIAL_ADMIN_PASSWORD = os.getenv("INITIAL_ADMIN_PASSWORD", "")  # Set to bootstrap first admin

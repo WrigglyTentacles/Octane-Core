@@ -19,6 +19,8 @@ FORMAT_CHOICES = [
     app_commands.Choice(name="1v1", value="1v1"),
     app_commands.Choice(name="2v2", value="2v2"),
     app_commands.Choice(name="3v3", value="3v3"),
+    app_commands.Choice(name="4v4", value="4v4"),
+    app_commands.Choice(name="Custom (e.g. 4v4)", value="custom"),
 ]
 
 MMR_PLAYLIST_CHOICES = [
