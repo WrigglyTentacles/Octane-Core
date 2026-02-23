@@ -24,6 +24,21 @@ const API = '/api';
 const STORAGE_KEY = 'octane-selected-tournament';
 const TAB_STORAGE_KEY = 'octane-selected-tab';
 
+/** Convert UTC ISO string to datetime-local value (local timezone). */
+function utcToDatetimeLocal(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Get Discord timestamp string from datetime-local value. */
+function toDiscordTimestamp(datetimeLocalValue, style = 'R') {
+  if (!datetimeLocalValue) return null;
+  const ts = Math.floor(new Date(datetimeLocalValue).getTime() / 1000);
+  return `<t:${ts}:${style}>`;
+}
+
 async function parseJson(res) {
   const text = await res.text();
   if (!text) return null;
@@ -383,44 +398,40 @@ function ParticipantsAndStandbyView({
   );
 }
 
-function TeamSlot({ name, teamId, teams, isTeam, title }) {
-  const [showTooltip, setShowTooltip] = useState(false);
-  const team = isTeam && teams?.length
-    ? (teamId ? teams.find((t) => t.id === teamId) : teams.find((t) => t.name === name))
-    : null;
-  const members = team?.members || [];
-  const hasMembers = members.length > 0;
+/** Shared tooltip popup - used by TeamSlot and champion/winner displays for consistent hover look */
+const tooltipPopupStyle = {
+  position: 'absolute',
+  left: '50%',
+  transform: 'translateX(-50%)',
+  bottom: '100%',
+  marginBottom: 6,
+  padding: '10px 14px',
+  background: 'var(--bg-elevated)',
+  border: '1px solid var(--border)',
+  borderRadius: 'var(--radius-sm)',
+  boxShadow: 'var(--shadow)',
+  zIndex: 1000,
+  minWidth: 140,
+  whiteSpace: 'nowrap',
+};
 
+function HoverTooltip({ title, items, children }) {
+  const [show, setShow] = useState(false);
+  const hasContent = items?.length > 0 || title;
   return (
     <div
       style={{ position: 'relative', display: 'inline-block' }}
-      onMouseEnter={() => hasMembers && setShowTooltip(true)}
-      onMouseLeave={() => setShowTooltip(false)}
+      onMouseEnter={() => hasContent && setShow(true)}
+      onMouseLeave={() => setShow(false)}
     >
-      <span style={{ cursor: hasMembers ? 'help' : 'default' }} title={title || (hasMembers ? 'Hover for team list' : null)}>
-        {name || 'TBD'}
+      <span style={{ cursor: hasContent ? 'help' : 'default' }} title={hasContent ? (items?.length ? `${title}\n${items.join('\n')}` : title) : null}>
+        {children}
       </span>
-      {showTooltip && hasMembers && (
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            bottom: '100%',
-            marginBottom: 6,
-            padding: '10px 14px',
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)',
-            boxShadow: 'var(--shadow)',
-            zIndex: 1000,
-            minWidth: 140,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', marginBottom: 6 }}>{team.name}</div>
-          {members.map((m) => (
-            <div key={m.id} style={{ fontSize: 13, color: 'var(--text-primary)' }}>• {m.display_name}</div>
+      {show && hasContent && (
+        <div style={tooltipPopupStyle}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', marginBottom: 6 }}>{title}</div>
+          {items?.map((item, i) => (
+            <div key={i} style={{ fontSize: 13, color: 'var(--text-primary)' }}>• {item}</div>
           ))}
         </div>
       )}
@@ -428,10 +439,33 @@ function TeamSlot({ name, teamId, teams, isTeam, title }) {
   );
 }
 
-function MatchSlot({ label, name, matchId, slot, onDrop, onSwapSlots, onAdvanceOpponent, hasOpponent }) {
+function TeamSlot({ name, teamId, teams, isTeam, title }) {
+  const team = isTeam && teams?.length
+    ? (teamId ? teams.find((t) => String(t.id) === String(teamId)) : teams.find((t) => t.name === name))
+    : null;
+  const members = team?.members || [];
+  const hasMembers = members.length > 0;
+  const items = members.map((m) => m.display_name || m.name || String(m.id));
+
+  if (!hasMembers) {
+    return <span>{name || 'TBD'}</span>;
+  }
+  return (
+    <HoverTooltip title={team?.name || name} items={items}>
+      {name || 'TBD'}
+    </HoverTooltip>
+  );
+}
+
+function MatchSlot({ label, name, matchId, slot, onDrop, onSwapSlots, onAdvanceOpponent, hasOpponent, teamId, teams, isTeam }) {
   const [isOver, setIsOver] = useState(false);
   const hasContent = name && name !== 'TBD' && name !== 'BYE';
   const canDrag = hasContent && onSwapSlots;
+  const slotContent = isTeam && teams?.length ? (
+    <TeamSlot name={name} teamId={teamId} teams={teams} isTeam={true} />
+  ) : (
+    (name || label)
+  );
   const handleDrop = (e) => {
     e.preventDefault();
     setIsOver(false);
@@ -472,7 +506,7 @@ function MatchSlot({ label, name, matchId, slot, onDrop, onSwapSlots, onAdvanceO
         onDragLeave={(e) => { if (e.currentTarget.contains(e.relatedTarget)) return; setIsOver(false); }}
         onDrop={handleDrop}
       >
-        {name || label}
+        {slotContent}
       </div>
       {name && name !== label && hasOpponent && onAdvanceOpponent && (
         <button
@@ -913,9 +947,15 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwap
         <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teams} teamId={m.team2_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={2} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} />
         {m.winner_name && (
           isChampion ? (
-            <div className="grand-final-winners-zone">
+            <div className="grand-final-winners-zone" style={{ overflow: 'visible' }}>
               <span className="champion-label">👑 Tournament Champion</span>
-              <span className="champion-name">{m.winner_name}</span>
+              <span className="champion-name">
+                {isTeam && teams?.length && m.winner_team_id ? (
+                  <TeamSlot name={m.winner_name} teamId={m.winner_team_id} teams={teams} isTeam={true} />
+                ) : (
+                  <HoverTooltip title="Champion" items={[m.winner_name]}>{m.winner_name}</HoverTooltip>
+                )}
+              </span>
               {!m.inferred_winner && (onSwapWinner || onClearWinner) && bothFilled && (
                 <div style={{ marginTop: 10, display: 'flex', justifyContent: 'center', gap: 8 }}>
                   {onSwapWinner && <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px' }} title="Swap winner">Swap</button>}
@@ -1032,7 +1072,13 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
           )}
           {m.winner_name && (
             <div className="winners-zone" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>🏆 {m.winner_name}</span>
+              <span style={{ fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>
+                🏆 {isTeam && teams?.length && m.winner_team_id ? (
+                  <TeamSlot name={m.winner_name} teamId={m.winner_team_id} teams={teams} isTeam={true} />
+                ) : (
+                  <HoverTooltip title="Winner" items={[m.winner_name]}>{m.winner_name}</HoverTooltip>
+                )}
+              </span>
               {m.inferred_winner && <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>(advanced)</span>}
               {!m.inferred_winner && onSwapWinner && (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id) && (
                 <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px' }} title="Swap winner (wrong result reported)">
@@ -1177,9 +1223,15 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
                 )}
                 {m.winner_name && (
                   sectionLabel === 'Grand Finals' ? (
-                    <div className="grand-final-winners-zone">
+                    <div className="grand-final-winners-zone" style={{ overflow: 'visible' }}>
                       <span className="champion-label">👑 Tournament Champion</span>
-                      <span className="champion-name">{m.winner_name}</span>
+                      <span className="champion-name">
+                        {isTeam && teamsToUse?.length && m.winner_team_id ? (
+                          <TeamSlot name={m.winner_name} teamId={m.winner_team_id} teams={teamsToUse} isTeam={true} />
+                        ) : (
+                          <HoverTooltip title="Champion" items={[m.winner_name]}>{m.winner_name}</HoverTooltip>
+                        )}
+                      </span>
                       {!m.inferred_winner && canEdit && hasOpponent && (
                         <div style={{ marginTop: 10, display: 'flex', justifyContent: 'center', gap: 8 }}>
                           <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px' }} title="Swap winner">
@@ -1193,7 +1245,13 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
                     </div>
                   ) : (
                     <div className="winners-zone" style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: 14 }}>🏆 Winner: {m.winner_name}</span>
+                      <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: 14 }}>
+                        🏆 Winner: {isTeam && teamsToUse?.length && m.winner_team_id ? (
+                          <TeamSlot name={m.winner_name} teamId={m.winner_team_id} teams={teamsToUse} isTeam={true} />
+                        ) : (
+                          <HoverTooltip title="Winner" items={[m.winner_name]}>{m.winner_name}</HoverTooltip>
+                        )}
+                      </span>
                       {m.inferred_winner && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>(advanced)</span>}
                       {!m.inferred_winner && canEdit && onSwapWinner && hasOpponent && (
                         <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px' }} title="Swap winner (wrong result reported)">
@@ -1316,7 +1374,7 @@ function App() {
   const [bracketType, setBracketType] = useState('single_elim');
   const [renameValue, setRenameValue] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuSection, setMenuSection] = useState(null); // null | 'rename' | 'create'
+  const [menuSection, setMenuSection] = useState(null); // null | 'rename' | 'create' | 'deadline'
 
   const fetchTournaments = async () => {
     try {
@@ -1956,6 +2014,9 @@ function App() {
                           <button onClick={() => { setMenuSection('rename'); setRenameValue(tournaments.find((t) => t.id === tournamentId)?.name ?? ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}>
                             Rename
                           </button>
+                          <button onClick={() => { setMenuSection('deadline'); const d = tournaments.find((t) => t.id === tournamentId)?.registration_deadline; setDeadlineValue(d ? utcToDatetimeLocal(d) : ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Registration signup deadline">
+                            Set deadline
+                          </button>
                           <button onClick={() => { cloneTournament(); setMenuOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Copy participants and standby to a new tournament">
                             Clone
                           </button>
@@ -1999,6 +2060,54 @@ function App() {
                         <button onClick={() => { setMenuSection(null); setRenameValue(''); }}>Cancel</button>
                       </div>
                     </div>
+                  ) : menuSection === 'deadline' ? (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Signup deadline</div>
+                      <input
+                        type="datetime-local"
+                        value={deadlineValue}
+                        onChange={(e) => setDeadlineValue(e.target.value)}
+                        style={{ width: '100%', marginBottom: 8 }}
+                        autoFocus
+                      />
+                      {deadlineValue && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+                          Copy for Discord: <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(deadlineValue, 'R')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '2px 6px', marginRight: 4 }}>relative (:R)</button>
+                          <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(deadlineValue, 'F')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '2px 6px', marginRight: 4 }}>full (:F)</button>
+                          {copyFeedback && <span style={{ color: 'var(--success)', marginLeft: 4 }}>{copyFeedback}</span>}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button className="primary" onClick={async () => {
+                          try {
+                            const body = { registration_deadline: deadlineValue ? new Date(deadlineValue).toISOString() : '' };
+                            const res = await authFetch(`${API}/tournaments/${tournamentId}`, {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(body),
+                            });
+                            if (!res.ok) throw new Error((await parseJson(res))?.detail || 'Failed');
+                            await fetchTournaments();
+                            setMenuSection(null);
+                            setMenuOpen(false);
+                          } catch (err) { setError(err.message); }
+                        }}>Save</button>
+                        <button onClick={async () => {
+                          try {
+                            const res = await authFetch(`${API}/tournaments/${tournamentId}`, {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ registration_deadline: '' }),
+                            });
+                            if (!res.ok) throw new Error((await parseJson(res))?.detail || 'Failed');
+                            await fetchTournaments();
+                            setMenuSection(null);
+                            setMenuOpen(false);
+                          } catch (err) { setError(err.message); }
+                        }}>Clear</button>
+                        <button onClick={() => { setMenuSection(null); }}>Cancel</button>
+                      </div>
+                    </div>
                   ) : (
                     <div>
                       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Create new tournament</div>
@@ -2016,20 +2125,39 @@ function App() {
                         <option value="3v3">3v3</option>
                         <option value="4v4">4v4</option>
                       </select>
+                      <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Signup deadline (optional)</label>
+                      <input
+                        type="datetime-local"
+                        value={newTournamentDeadline}
+                        onChange={(e) => setNewTournamentDeadline(e.target.value)}
+                        style={{ width: '100%', marginBottom: 8 }}
+                      />
+                      {newTournamentDeadline && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+                          Copy for Discord: <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(newTournamentDeadline, 'R')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '2px 6px', marginRight: 4 }}>relative (:R)</button>
+                          <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(newTournamentDeadline, 'F')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '2px 6px', marginRight: 4 }}>full (:F)</button>
+                          {copyFeedback && <span style={{ color: 'var(--success)', marginLeft: 4 }}>{copyFeedback}</span>}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', gap: 8 }}>
                         <button
                           className="primary"
                           onClick={async () => {
                             if (!newTournamentName.trim()) return;
                             try {
+                              const body = { name: newTournamentName.trim(), format: newTournamentFormat };
+                              if (newTournamentDeadline) {
+                                body.registration_deadline = new Date(newTournamentDeadline).toISOString();
+                              }
                               const res = await authFetch(`${API}/tournaments`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ name: newTournamentName.trim(), format: newTournamentFormat }),
+                                body: JSON.stringify(body),
                               });
                               const data = await parseJson(res);
                               if (!res.ok) throw new Error(data?.detail || 'Failed');
                               setNewTournamentName('');
+                              setNewTournamentDeadline('');
                               setMenuSection(null);
                               setMenuOpen(false);
                               await fetchTournaments();
@@ -2042,7 +2170,7 @@ function App() {
                         >
                           Create
                         </button>
-                        <button onClick={() => { setMenuSection(null); setNewTournamentName(''); }}>Cancel</button>
+                        <button onClick={() => { setMenuSection(null); setNewTournamentName(''); setNewTournamentDeadline(''); }}>Cancel</button>
                       </div>
                     </div>
                   )}

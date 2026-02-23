@@ -72,6 +72,25 @@ async def get_tournament(session: AsyncSession, tournament_id: int, guild_id: in
     return result.scalar_one_or_none()
 
 
+def _parse_deadline(s: str) -> Optional[datetime]:
+    """Parse deadline string (YYYY-MM-DD HH:mm or ISO format) to UTC datetime."""
+    s = s.strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 tournament_group = app_commands.Group(name="tournament", description="Tournament management")
 
 
@@ -80,6 +99,7 @@ tournament_group = app_commands.Group(name="tournament", description="Tournament
     name="Tournament name (optional, defaults to date_format e.g. 2-23-2026_2v2)",
     format="1v1, 2v2, or 3v3",
     mmr_playlist="Playlist to use for MMR seeding",
+    deadline="Registration deadline (e.g. 2026-02-24 18:00, UTC)",
 )
 @app_commands.choices(format=FORMAT_CHOICES, mmr_playlist=MMR_PLAYLIST_CHOICES)
 @mod_or_higher()
@@ -88,11 +108,20 @@ async def create(
     format: str,
     mmr_playlist: str,
     name: Optional[str] = None,
+    deadline: Optional[str] = None,
 ) -> None:
     """Create a tournament. Name defaults to M-D-YYYY_format (e.g. 2-23-2026_2v2), with (1), (2) for duplicates."""
     if not interaction.guild_id:
         await interaction.response.send_message("Use this in a server.", ephemeral=True)
         return
+    if deadline:
+        parsed = _parse_deadline(deadline)
+        if not parsed:
+            await interaction.response.send_message(
+                "Invalid deadline format. Use YYYY-MM-DD HH:mm (e.g. 2026-02-24 18:00).",
+                ephemeral=True,
+            )
+            return
     await interaction.response.defer(ephemeral=True)
 
     async for session in get_async_session():
@@ -100,20 +129,22 @@ async def create(
             name = await _default_tournament_name(interaction.guild_id, format, session)
         else:
             name = name.strip()
+        reg_deadline = _parse_deadline(deadline) if deadline else None
         t = Tournament(
             guild_id=interaction.guild_id,
             name=name,
             format=format,
             mmr_playlist=mmr_playlist,
             status="open",
+            registration_deadline=reg_deadline,
         )
         session.add(t)
         await session.commit()
         await session.refresh(t)
-        await interaction.followup.send(
-            f"Created tournament **{name}** ({format}, MMR from {mmr_playlist}). ID: {t.id}",
-            ephemeral=True,
-        )
+        msg = f"Created tournament **{name}** ({format}, MMR from {mmr_playlist}). ID: {t.id}"
+        if reg_deadline:
+            msg += f"\nRegistration deadline: {reg_deadline.strftime('%Y-%m-%d %H:%M')} UTC"
+        await interaction.followup.send(msg, ephemeral=True)
         return
 
 
@@ -164,6 +195,16 @@ async def register_cmd(interaction: discord.Interaction, tournament_id: int) -> 
             return
         if t.status != "open":
             await interaction.followup.send(f"Tournament is {t.status}, registration closed.", ephemeral=True)
+            return
+        if t.registration_deadline and datetime.now(timezone.utc) > t.registration_deadline:
+            dt = t.registration_deadline
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            ts = int(dt.timestamp())
+            await interaction.followup.send(
+                f"Registration closed. Deadline was <t:{ts}:F>.",
+                ephemeral=True,
+            )
             return
         existing = await session.execute(
             select(Registration).where(
@@ -257,11 +298,19 @@ async def post(
         )
         count = len(reg_count.scalars().all())
 
+        deadline_line = ""
+        if t.registration_deadline:
+            dt = t.registration_deadline
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            ts = int(dt.timestamp())
+            deadline_line = f"**Signup deadline:** <t:{ts}:F> (<t:{ts}:R>)\n\n"
         embed = discord.Embed(
             title=f"📋 {t.name}",
             description=(
                 f"**Format:** {t.format}\n"
                 f"**MMR Playlist:** {t.mmr_playlist}\n\n"
+                f"{deadline_line}"
                 f"React with {SIGNUP_EMOJI} to sign up!\n"
                 f"Remove your reaction to drop out.\n\n"
                 f"*Or use `/tournament register` with ID **{t.id}***"
@@ -321,6 +370,7 @@ async def post(
     tournament_id="Tournament ID",
     name="New name (optional)",
     status="New status: open, closed, in_progress, completed",
+    deadline="Registration deadline (e.g. 2026-02-24 18:00 UTC). Use empty to clear.",
 )
 @mod_or_higher()
 async def edit(
@@ -328,11 +378,20 @@ async def edit(
     tournament_id: int,
     name: Optional[str] = None,
     status: Optional[str] = None,
+    deadline: Optional[str] = None,
 ) -> None:
     """Edit tournament."""
     if not interaction.guild_id:
         await interaction.response.send_message("Use this in a server.", ephemeral=True)
         return
+    if deadline is not None and deadline.strip():
+        parsed = _parse_deadline(deadline)
+        if not parsed:
+            await interaction.response.send_message(
+                "Invalid deadline format. Use YYYY-MM-DD HH:mm (e.g. 2026-02-24 18:00).",
+                ephemeral=True,
+            )
+            return
     await interaction.response.defer(ephemeral=True)
 
     async for session in get_async_session():
@@ -344,6 +403,8 @@ async def edit(
             t.name = name
         if status:
             t.status = status
+        if deadline is not None:
+            t.registration_deadline = _parse_deadline(deadline) if deadline.strip() else None
         await session.commit()
         await interaction.followup.send(f"Updated tournament **{t.name}**.", ephemeral=True)
         return

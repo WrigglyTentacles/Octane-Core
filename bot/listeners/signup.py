@@ -1,6 +1,8 @@
 """Reaction-based tournament signup listener."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import delete, select
 
 import discord
@@ -44,6 +46,22 @@ async def _handle_reaction_add(payload: discord.RawReactionActionEvent, bot: com
         # Check tournament exists and is open
         t = await session.get(Tournament, signup_msg.tournament_id)
         if not t or t.status != "open":
+            return
+        if t.registration_deadline and datetime.now(timezone.utc) > t.registration_deadline:
+            try:
+                channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
+                user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
+                if channel and user:
+                    dt = t.registration_deadline
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    ts = int(dt.timestamp())
+                    await channel.send(
+                        f"{user.mention} Registration closed. Deadline was <t:{ts}:F>.",
+                        delete_after=10,
+                    )
+            except Exception:
+                pass
             return
 
         # Ensure user has registered (Player record)

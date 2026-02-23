@@ -1,6 +1,7 @@
 """API routes for tournament configuration and bracket management."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -504,6 +505,7 @@ class TournamentCreate(BaseModel):
     name: str
     format: str = "1v1"  # 1v1, 2v2, 3v3, 4v4, custom
     guild_id: Optional[int] = None  # Optional; 0 for web-only
+    registration_deadline: Optional[str] = None  # ISO datetime, e.g. 2026-02-24T18:00:00
 
 
 def _mmr_for_format(fmt: str) -> str:
@@ -514,9 +516,24 @@ def _mmr_for_format(fmt: str) -> str:
     return "standard"
 
 
+def _parse_deadline(s: Optional[str]):
+    """Parse ISO datetime string to UTC datetime."""
+    if not s or not s.strip():
+        return None
+    s = s.strip()
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
 @router.post("/tournaments")
 async def create_tournament(body: TournamentCreate):
     """Create a tournament (for web UI; guild_id=0 for non-Discord use)."""
+    reg_deadline = _parse_deadline(body.registration_deadline)
     async with async_session_factory() as session:
         t = Tournament(
             guild_id=body.guild_id or 0,
@@ -524,11 +541,12 @@ async def create_tournament(body: TournamentCreate):
             format=body.format,
             mmr_playlist=_mmr_for_format(body.format),
             status="open",
+            registration_deadline=reg_deadline,
         )
         session.add(t)
         await session.commit()
         await session.refresh(t)
-        return {"id": t.id, "name": t.name, "format": t.format}
+        return {"id": t.id, "name": t.name, "format": t.format, "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None}
 
 
 @router.get("/tournaments")
@@ -540,7 +558,13 @@ async def list_tournaments():
         )
         tournaments = result.scalars().all()
         return [
-            {"id": t.id, "name": t.name, "format": t.format, "status": t.status}
+            {
+                "id": t.id,
+                "name": t.name,
+                "format": t.format,
+                "status": t.status,
+                "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+            }
             for t in tournaments
         ]
 
@@ -579,9 +603,17 @@ async def update_tournament(tournament_id: int, body: TournamentUpdate, user: Us
                         await session.delete(bracket)
         if body.status is not None:
             t.status = body.status
+        if body.registration_deadline is not None:
+            t.registration_deadline = _parse_deadline(body.registration_deadline)
         await session.commit()
         await session.refresh(t)
-        return {"id": t.id, "name": t.name, "format": t.format, "status": t.status}
+        return {
+            "id": t.id,
+            "name": t.name,
+            "format": t.format,
+            "status": t.status,
+            "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+        }
 
 
 class CloneTournamentRequest(BaseModel):
