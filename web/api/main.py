@@ -86,6 +86,8 @@ async def get_bracket(tournament_id: int):
                 "match_num": m.match_num,
                 "round_num": m.round_num,
                 "bracket_section": m.bracket_section or "winners",
+                "parent_match_id": m.parent_match_id,
+                "parent_match_slot": m.parent_match_slot,
                 "team1_id": m.team1_id,
                 "team2_id": m.team2_id,
                 "player1_id": m.player1_id,

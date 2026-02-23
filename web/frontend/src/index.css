@@ -103,3 +103,55 @@ option {
   background: var(--bg-secondary);
   color: var(--text-primary);
 }
+
+/* Bracket winner celebration */
+@keyframes winner-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(34, 197, 94, 0.3), 0 0 16px rgba(34, 197, 94, 0.15); }
+  50% { box-shadow: 0 0 12px rgba(34, 197, 94, 0.5), 0 0 24px rgba(34, 197, 94, 0.25); }
+}
+
+.winners-zone {
+  position: relative;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15) 0%, rgba(34, 197, 94, 0.05) 100%);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border-radius: var(--radius-sm);
+  animation: winner-glow 2.5s ease-in-out infinite;
+}
+
+/* Grand Final champion - special celebration */
+@keyframes champion-glow {
+  0%, 100% {
+    box-shadow: 0 0 16px rgba(234, 179, 8, 0.4), 0 0 32px rgba(234, 179, 8, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 24px rgba(234, 179, 8, 0.6), 0 0 48px rgba(234, 179, 8, 0.3);
+  }
+}
+
+.grand-final-winners-zone {
+  position: relative;
+  margin-top: 12px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(234, 179, 8, 0.2) 0%, rgba(234, 179, 8, 0.08) 50%, rgba(234, 179, 8, 0.15) 100%);
+  border: 2px solid rgba(234, 179, 8, 0.5);
+  border-radius: var(--radius);
+  animation: champion-glow 2s ease-in-out infinite;
+  text-align: center;
+}
+
+.grand-final-winners-zone .champion-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: rgba(234, 179, 8, 0.9);
+  margin-bottom: 4px;
+}
+
+.grand-final-winners-zone .champion-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fef08a;
+}

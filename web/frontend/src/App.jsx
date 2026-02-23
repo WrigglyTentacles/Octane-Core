@@ -893,32 +893,48 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwap
   const colW = 180;
   const colGap = 32;
 
-  const renderMatchBlock = (m) => {
+  const lastRoundNum = roundEntries.length > 0 ? roundEntries[roundEntries.length - 1][0] : null;
+  const renderMatchBlock = (m, roundNum) => {
     const s1 = m.team1_name || m.player1_name || 'TBD';
     const s2 = m.team2_name || m.player2_name || 'TBD';
     const w1 = m.winner_name === s1;
     const w2 = m.winner_name === s2;
     const bothFilled = (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id);
     const canSetWinner = bothFilled && !m.winner_name;
+    const isChampion = m.winner_name && String(roundNum) === String(lastRoundNum);
     return (
       <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 0, minWidth: colW }}>
         <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teams} teamId={m.team1_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={1} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} />
         <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
         <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teams} teamId={m.team2_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={2} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} />
         {m.winner_name && (
-          <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>→ {m.winner_name}</span>
-            {onSwapWinner && bothFilled && (
-              <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px' }} title="Swap winner (wrong result reported)">
-                Swap
-              </button>
-            )}
-            {onClearWinner && bothFilled && (
-              <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px', color: 'var(--text-muted)' }} title="Undo winner (clear and fix manually)">
-                Undo
-              </button>
-            )}
-          </div>
+          isChampion ? (
+            <div className="grand-final-winners-zone">
+              <span className="champion-label">👑 Tournament Champion</span>
+              <span className="champion-name">{m.winner_name}</span>
+              {!m.inferred_winner && (onSwapWinner || onClearWinner) && bothFilled && (
+                <div style={{ marginTop: 10, display: 'flex', justifyContent: 'center', gap: 8 }}>
+                  {onSwapWinner && <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px' }} title="Swap winner">Swap</button>}
+                  {onClearWinner && <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px', color: 'var(--text-muted)' }} title="Undo winner">Undo</button>}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="winners-zone" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>🏆 {m.winner_name}</span>
+              {m.inferred_winner && <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>(advanced)</span>}
+              {!m.inferred_winner && onSwapWinner && bothFilled && (
+                <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px' }} title="Swap winner (wrong result reported)">
+                  Swap
+                </button>
+              )}
+              {!m.inferred_winner && onClearWinner && bothFilled && (
+                <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px', color: 'var(--text-muted)' }} title="Undo winner (clear and fix manually)">
+                  Undo
+                </button>
+              )}
+            </div>
+          )
         )}
         {canSetWinner && onSetWinner && (
           <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>Click team to set winner</div>
@@ -935,7 +951,7 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwap
         {roundEntries.map(([roundNum, matches]) => (
           <div key={roundNum} style={{ display: 'flex', flexDirection: 'column', gap: matchGap, alignItems: 'flex-start' }}>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>Round {roundNum}</div>
-            {matches.map((m) => m && renderMatchBlock(m))}
+            {matches.map((m) => m && renderMatchBlock(m, roundNum))}
           </div>
         ))}
       </div>
@@ -1011,14 +1027,15 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
             </>
           )}
           {m.winner_name && (
-            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>→ {m.winner_name}</span>
-              {onSwapWinner && (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id) && (
+            <div className="winners-zone" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>🏆 {m.winner_name}</span>
+              {m.inferred_winner && <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>(advanced)</span>}
+              {!m.inferred_winner && onSwapWinner && (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id) && (
                 <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px' }} title="Swap winner (wrong result reported)">
                   Swap
                 </button>
               )}
-              {onClearWinner && (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id) && (
+              {!m.inferred_winner && onClearWinner && (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id) && (
                 <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px', color: 'var(--text-muted)' }} title="Undo winner (clear and fix manually)">
                   Undo
                 </button>
@@ -1079,11 +1096,39 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
   );
 }
 
+/** Infer winner from advancement: if a team was dragged to the next round, they won their previous match. */
+function enrichRoundsWithInferredWinners(rounds) {
+  if (!rounds || typeof rounds !== 'object') return rounds;
+  const allMatches = Object.values(rounds).flat();
+  const byId = Object.fromEntries(allMatches.map((m) => [m.id, m]));
+  const enriched = {};
+  for (const [r, matches] of Object.entries(rounds)) {
+    enriched[r] = matches.map((m) => {
+      const copy = { ...m };
+      if (!copy.winner_name && copy.parent_match_id) {
+        const parent = byId[copy.parent_match_id];
+        if (parent) {
+          const slot = copy.parent_match_slot;
+          const advancedName = slot === 1 ? (parent.team1_name || parent.player1_name) : (parent.team2_name || parent.player2_name);
+          if (advancedName && advancedName !== 'TBD' && advancedName !== 'BYE') {
+            copy.winner_name = advancedName;
+            copy.inferred_winner = true;
+          }
+        }
+      }
+      return copy;
+    });
+  }
+  return enriched;
+}
+
 function BracketView({ bracket, tournament, teams, participants, standby, onUpdateMatch, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, onSwapSlots, isPreview, canEdit }) {
   const isTeam = tournament?.format !== '1v1';
   const teamsToUse = (bracket?.teams && bracket.teams.length > 0) ? bracket.teams : (teams || []);
 
-  const allMatches = bracket?.rounds ? Object.values(bracket.rounds).flat() : [];
+  const rawRounds = bracket?.rounds || {};
+  const rounds = enrichRoundsWithInferredWinners(rawRounds);
+  const allMatches = Object.values(rounds).flat();
   const isDoubleElim = bracket?.bracket_type === 'double_elim';
 
   const bySection = isDoubleElim
@@ -1127,19 +1172,37 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
                   </>
                 )}
                 {m.winner_name && (
-                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: 14 }}>Winner: {m.winner_name}</span>
-                    {canEdit && onSwapWinner && hasOpponent && (
-                      <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px' }} title="Swap winner (wrong result reported)">
-                        Swap
-                      </button>
-                    )}
-                    {canEdit && onClearWinner && hasOpponent && (
-                      <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px', color: 'var(--text-muted)' }} title="Undo winner (clear and fix manually)">
-                        Undo
-                      </button>
-                    )}
-                  </div>
+                  sectionLabel === 'Grand Finals' ? (
+                    <div className="grand-final-winners-zone">
+                      <span className="champion-label">👑 Tournament Champion</span>
+                      <span className="champion-name">{m.winner_name}</span>
+                      {!m.inferred_winner && canEdit && hasOpponent && (
+                        <div style={{ marginTop: 10, display: 'flex', justifyContent: 'center', gap: 8 }}>
+                          <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px' }} title="Swap winner">
+                            Swap
+                          </button>
+                          <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px', color: 'var(--text-muted)' }} title="Undo winner">
+                            Undo
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="winners-zone" style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: 14 }}>🏆 Winner: {m.winner_name}</span>
+                      {m.inferred_winner && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>(advanced)</span>}
+                      {!m.inferred_winner && canEdit && onSwapWinner && hasOpponent && (
+                        <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px' }} title="Swap winner (wrong result reported)">
+                          Swap
+                        </button>
+                      )}
+                      {!m.inferred_winner && canEdit && onClearWinner && hasOpponent && (
+                        <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px', color: 'var(--text-muted)' }} title="Undo winner (clear and fix manually)">
+                          Undo
+                        </button>
+                      )}
+                    </div>
+                  )
                 )}
               </div>
             </div>
@@ -1151,8 +1214,8 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
   };
 
   const renderSingleElimTree = () => {
-    const rounds = bracket?.rounds ? Object.entries(bracket.rounds).filter(([k]) => Number(k) < 10).sort((a, b) => Number(a[0]) - Number(b[0])) : [];
-    const roundsObj = Object.fromEntries(rounds);
+    const roundsArr = Object.entries(rounds).filter(([k]) => Number(k) < 10).sort((a, b) => Number(a[0]) - Number(b[0]));
+    const roundsObj = Object.fromEntries(roundsArr);
     return (
         <BracketVisual
         rounds={roundsObj}
@@ -1247,8 +1310,9 @@ function App() {
   const [newTournamentName, setNewTournamentName] = useState('');
   const [newTournamentFormat, setNewTournamentFormat] = useState('1v1');
   const [bracketType, setBracketType] = useState('single_elim');
-  const [editingName, setEditingName] = useState(false);
   const [renameValue, setRenameValue] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuSection, setMenuSection] = useState(null); // null | 'rename' | 'create'
 
   const fetchTournaments = async () => {
     try {
@@ -1659,7 +1723,6 @@ function App() {
       });
       const data = await parseJson(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to rename');
-      setEditingName(false);
       setRenameValue('');
       await fetchTournaments();
     } catch (err) {
@@ -1834,11 +1897,11 @@ function App() {
           )}
         </div>
       </div>
-      <div style={{ marginBottom: 24, display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
+      <div style={{ marginBottom: 24, display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center', position: 'relative' }}>
         <label style={{ color: 'var(--text-secondary)' }}>Tournament:</label>
         <select
           value={tournamentId ?? ''}
-          onChange={(e) => { setTournamentId(Number(e.target.value) || null); setEditingName(false); }}
+          onChange={(e) => { setTournamentId(Number(e.target.value) || null); setMenuSection(null); setMenuOpen(false); }}
           style={{ padding: '10px 14px', minWidth: 220 }}
         >
           <option value="">Select...</option>
@@ -1846,82 +1909,137 @@ function App() {
             <option key={t.id} value={t.id}>{t.name} ({t.format})</option>
           ))}
         </select>
-        <button onClick={fetchData}>Refresh</button>
-        {tournamentId && canEdit && (
-          <>
-            {editingName ? (
-              <>
-                <input
-                  type="text"
-                  placeholder="New name"
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && renameTournament()}
-                  style={{ padding: '10px 14px', width: 180 }}
-                  autoFocus
-                />
-                <button className="primary" onClick={renameTournament} disabled={!renameValue.trim()}>Save</button>
-                <button onClick={() => { setEditingName(false); setRenameValue(''); }}>Cancel</button>
-              </>
-            ) : (
-              <button onClick={() => { setEditingName(true); setRenameValue(tournaments.find((t) => t.id === tournamentId)?.name ?? ''); }}>Rename</button>
-            )}
-            <button onClick={cloneTournament} title="Copy participants and standby to a new tournament">Clone</button>
-            <button onClick={deleteTournament} style={{ color: 'var(--error)' }}>Delete</button>
-            <label style={{ marginLeft: 8, color: 'var(--text-muted)' }}>Format:</label>
-            <select
-              value={tournaments.find((t) => t.id === tournamentId)?.format ?? '1v1'}
-              onChange={(e) => updateTournamentFormat(e.target.value)}
-              style={{ padding: '8px 12px' }}
-              title="Change tournament format (clears teams/bracket when switching)"
-            >
-              <option value="1v1">1v1</option>
-              <option value="2v2">2v2</option>
-              <option value="3v3">3v3</option>
-              <option value="4v4">4v4</option>
-            </select>
-          </>
-        )}
-        {canEdit && <span style={{ marginLeft: 8, color: 'var(--text-muted)' }}>or create:</span>}
         {canEdit && (
-          <>
-        <input
-          type="text"
-          placeholder="Tournament name"
-          value={newTournamentName}
-          onChange={(e) => setNewTournamentName(e.target.value)}
-          style={{ padding: '10px 14px', width: 180 }}
-        />
-        <select value={newTournamentFormat} onChange={(e) => setNewTournamentFormat(e.target.value)} style={{ padding: '10px 14px' }}>
-          <option value="1v1">1v1</option>
-          <option value="2v2">2v2</option>
-          <option value="3v3">3v3</option>
-          <option value="4v4">4v4</option>
-        </select>
-        <button
-          className="primary"
-          onClick={async () => {
-            if (!newTournamentName.trim()) return;
-            try {
-              const res = await authFetch(`${API}/tournaments`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: newTournamentName.trim(), format: newTournamentFormat }),
-              });
-              const data = await parseJson(res);
-              if (!res.ok) throw new Error(data?.detail || 'Failed');
-              setNewTournamentName('');
-              await fetchTournaments();
-              setTournamentId(data.id);
-            } catch (err) {
-              setError(err.message);
-            }
-          }}
-          disabled={!newTournamentName.trim()}
-        >
-          Create
-        </button>
-          </>
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setMenuOpen((o) => !o)}
+              style={{ padding: '10px 14px', fontSize: 18, lineHeight: 1 }}
+              title="Tournament actions"
+            >
+              ☰
+            </button>
+            {menuOpen && (
+              <>
+                <div style={{ position: 'fixed', inset: 0, zIndex: 10 }} onClick={() => { setMenuOpen(false); setMenuSection(null); }} aria-hidden="true" />
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    marginTop: 4,
+                    minWidth: 260,
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)',
+                    boxShadow: 'var(--shadow)',
+                    zIndex: 20,
+                    padding: 12,
+                  }}
+                >
+                  {menuSection === null ? (
+                    <>
+                      <button onClick={() => { fetchData(); setMenuOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}>
+                        Refresh
+                      </button>
+                      {tournamentId && (
+                        <>
+                          <button onClick={() => { setMenuSection('rename'); setRenameValue(tournaments.find((t) => t.id === tournamentId)?.name ?? ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}>
+                            Rename
+                          </button>
+                          <button onClick={() => { cloneTournament(); setMenuOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Copy participants and standby to a new tournament">
+                            Clone
+                          </button>
+                          <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0' }} />
+                          <button onClick={() => deleteTournament()} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', color: 'var(--error)' }}>
+                            Delete
+                          </button>
+                          <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0' }} />
+                          <div style={{ padding: '8px 0 4px', fontSize: 11, color: 'var(--text-muted)' }}>Format:</div>
+                          <select
+                            value={tournaments.find((t) => t.id === tournamentId)?.format ?? '1v1'}
+                            onChange={(e) => { updateTournamentFormat(e.target.value); setMenuOpen(false); }}
+                            style={{ width: '100%', marginBottom: 8 }}
+                          >
+                            <option value="1v1">1v1</option>
+                            <option value="2v2">2v2</option>
+                            <option value="3v3">3v3</option>
+                            <option value="4v4">4v4</option>
+                          </select>
+                        </>
+                      )}
+                      <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0' }} />
+                      <button onClick={() => { setMenuSection('create'); setNewTournamentName(''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px' }}>
+                        Create new tournament
+                      </button>
+                    </>
+                  ) : menuSection === 'rename' ? (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Rename tournament</div>
+                      <input
+                        type="text"
+                        placeholder="New name"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && renameTournament()}
+                        style={{ width: '100%', marginBottom: 8 }}
+                        autoFocus
+                      />
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="primary" onClick={() => { renameTournament(); setMenuSection(null); setMenuOpen(false); }} disabled={!renameValue.trim()}>Save</button>
+                        <button onClick={() => { setMenuSection(null); setRenameValue(''); }}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Create new tournament</div>
+                      <input
+                        type="text"
+                        placeholder="Tournament name"
+                        value={newTournamentName}
+                        onChange={(e) => setNewTournamentName(e.target.value)}
+                        style={{ width: '100%', marginBottom: 8 }}
+                        autoFocus
+                      />
+                      <select value={newTournamentFormat} onChange={(e) => setNewTournamentFormat(e.target.value)} style={{ width: '100%', marginBottom: 8 }}>
+                        <option value="1v1">1v1</option>
+                        <option value="2v2">2v2</option>
+                        <option value="3v3">3v3</option>
+                        <option value="4v4">4v4</option>
+                      </select>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          className="primary"
+                          onClick={async () => {
+                            if (!newTournamentName.trim()) return;
+                            try {
+                              const res = await authFetch(`${API}/tournaments`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ name: newTournamentName.trim(), format: newTournamentFormat }),
+                              });
+                              const data = await parseJson(res);
+                              if (!res.ok) throw new Error(data?.detail || 'Failed');
+                              setNewTournamentName('');
+                              setMenuSection(null);
+                              setMenuOpen(false);
+                              await fetchTournaments();
+                              setTournamentId(data.id);
+                            } catch (err) {
+                              setError(err.message);
+                            }
+                          }}
+                          disabled={!newTournamentName.trim()}
+                        >
+                          Create
+                        </button>
+                        <button onClick={() => { setMenuSection(null); setNewTournamentName(''); }}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
       {error && (
