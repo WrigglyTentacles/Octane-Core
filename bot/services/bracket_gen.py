@@ -43,11 +43,17 @@ async def get_registrations_with_mmr(
     seen_teams = set()
     for reg in regs:
         if t.format == "1v1":
-            player_data = await rl_service.get_player_by_epic_id(reg.player.epic_id)
+            player_data = await rl_service.get_player_data(
+                epic_id=reg.player.epic_id, epic_username=reg.player.epic_username
+            )
             if player_data:
                 info = rl_service.get_playlist_mmr(player_data, mmr_playlist)
                 if info:
                     mmr_list.append((reg.player_id, info[0], False))
+                else:
+                    mmr_list.append((reg.player_id, 0, False))  # No MMR data, seed last
+            else:
+                mmr_list.append((reg.player_id, 0, False))  # No Epic linked, seed last
         else:
             if reg.team_id and reg.team_id not in seen_teams:
                 seen_teams.add(reg.team_id)
@@ -55,7 +61,9 @@ async def get_registrations_with_mmr(
                 if team:
                     team_mmrs = []
                     for m in team.members:
-                        player_data = await rl_service.get_player_by_epic_id(m.player.epic_id)
+                        player_data = await rl_service.get_player_data(
+                            epic_id=m.player.epic_id, epic_username=m.player.epic_username
+                        )
                         if player_data:
                             info = rl_service.get_playlist_mmr(player_data, mmr_playlist)
                             if info:
@@ -63,6 +71,8 @@ async def get_registrations_with_mmr(
                     if team_mmrs:
                         avg_mmr = sum(team_mmrs) // len(team_mmrs)
                         mmr_list.append((reg.team_id, avg_mmr, True))
+                    else:
+                        mmr_list.append((reg.team_id, 0, True))  # No MMR, seed last
 
     mmr_list.sort(key=lambda x: x[1], reverse=True)
     return mmr_list

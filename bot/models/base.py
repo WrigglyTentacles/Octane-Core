@@ -32,6 +32,14 @@ async def get_async_session():
 
 # Migrations for existing databases
 _MIGRATIONS = [
+    "ALTER TABLE players ADD COLUMN epic_username VARCHAR(64)",
+    # Make epic_id nullable (SQLite requires table recreation)
+    "CREATE TABLE players_new (discord_id INTEGER NOT NULL PRIMARY KEY, display_name VARCHAR(128), epic_username VARCHAR(64), epic_id VARCHAR(32))",
+    "INSERT INTO players_new SELECT discord_id, display_name, epic_username, epic_id FROM players",
+    "DROP TABLE players",
+    "ALTER TABLE players_new RENAME TO players",
+    "CREATE UNIQUE INDEX ix_players_epic_id ON players(epic_id)",
+    "CREATE TABLE IF NOT EXISTS tournament_signup_messages (id INTEGER PRIMARY KEY, message_id INTEGER UNIQUE, channel_id INTEGER, guild_id INTEGER, tournament_id INTEGER REFERENCES tournaments(id), signup_emoji VARCHAR(32) DEFAULT '📝')",
     "ALTER TABLE bracket_matches ADD COLUMN manual_entry1_id INTEGER REFERENCES tournament_manual_entries(id)",
     "ALTER TABLE bracket_matches ADD COLUMN manual_entry2_id INTEGER REFERENCES tournament_manual_entries(id)",
     "ALTER TABLE bracket_matches ADD COLUMN winner_manual_entry_id INTEGER REFERENCES tournament_manual_entries(id)",

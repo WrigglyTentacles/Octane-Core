@@ -38,7 +38,7 @@ class OctaneBot(commands.Bot):
         # Add commands
         self.tree.add_command(registration.register)
         self.tree.add_command(registration.profile)
-        self.tree.add_command(registration.update_epic)
+        self.tree.add_command(registration.mmrcheck)
         self.tree.add_command(mmr.mmr)
         self.tree.add_command(mmr.leaderboard)
         self.tree.add_command(tournaments.tournament_group)

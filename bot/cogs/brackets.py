@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 
 from bot.checks import mod_or_higher
-from bot.models import Bracket, BracketMatch, Player, Team, Tournament, init_db
+from bot.models import Bracket, BracketMatch, Player, Registration, Team, Tournament, init_db
 from bot.models.base import get_async_session
 from bot.services.bracket_gen import create_single_elim_bracket
 from bot.services.rl_api import RLAPIService

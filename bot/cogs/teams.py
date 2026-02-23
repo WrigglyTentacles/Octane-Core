@@ -89,7 +89,7 @@ async def add(
             return
         p = await get_player(session, player.id)
         if not p:
-            await interaction.followup.send(f"{player.mention} hasn't registered an Epic ID.", ephemeral=True)
+            await interaction.followup.send(f"{player.mention} hasn't registered yet. Use `/register` first.", ephemeral=True)
             return
         result = await session.execute(
             select(Team).where(

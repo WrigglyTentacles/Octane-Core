@@ -36,8 +36,37 @@ class RLAPIService:
         """Close the API client."""
         await self._client.close()
 
-    def _cache_key(self, epic_id: str) -> str:
-        return f"epic:{epic_id}"
+    def _cache_key(self, key: str) -> str:
+        return f"epic:{key}"
+
+    async def get_player_by_epic_name(self, epic_username: str) -> Player | None:
+        """Get player by Epic display name. Returns None if not found."""
+        key = self._cache_key(f"name:{epic_username.lower()}")
+        now = time.time()
+        if key in self._cache:
+            player, ts = self._cache[key]
+            if now - ts < CACHE_TTL:
+                return player
+            del self._cache[key]
+
+        try:
+            player = await self._client.get_player_by_name(Platform.epic, epic_username)
+            self._cache[key] = (player, now)
+            return player
+        except rlapi.errors.PlayerNotFound:
+            return None
+        except rlapi.errors.RLApiException:
+            raise
+
+    async def get_player_data(
+        self, epic_id: str | None = None, epic_username: str | None = None
+    ) -> Player | None:
+        """Get player by Epic ID (preferred) or Epic username. Returns None if not found."""
+        if epic_id:
+            return await self.get_player_by_epic_id(epic_id)
+        if epic_username:
+            return await self.get_player_by_epic_name(epic_username)
+        return None
 
     async def get_player_by_epic_id(self, epic_id: str) -> Player | None:
         """Get player by Epic Account ID. Returns None if not found."""

@@ -5,6 +5,7 @@ from bot.models.tournament import Tournament
 from bot.models.registration import Registration
 from bot.models.team import Team, TeamManualMember
 from bot.models.manual_entry import TournamentManualEntry
+from bot.models.signup_message import TournamentSignupMessage
 from bot.models.bracket import Bracket, BracketMatch  # noqa: F401 - for metadata
 from bot.models.user import User  # noqa: F401 - for metadata
 from bot.models.site_settings import SiteSettings  # noqa: F401 - for metadata
@@ -17,6 +18,7 @@ __all__ = [
     "Team",
     "TeamManualMember",
     "TournamentManualEntry",
+    "TournamentSignupMessage",
     "Bracket",
     "BracketMatch",
     "User",

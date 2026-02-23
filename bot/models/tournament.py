@@ -57,3 +57,6 @@ class Tournament(Base):
     manual_entries = relationship(
         "TournamentManualEntry", back_populates="tournament", cascade="all, delete-orphan"
     )
+    signup_messages = relationship(
+        "TournamentSignupMessage", back_populates="tournament", cascade="all, delete-orphan"
+    )

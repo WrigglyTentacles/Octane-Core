@@ -1,4 +1,4 @@
-"""Tournaments cog - /tournament create, list, register, edit, delete."""
+"""Tournaments cog - /tournament create, list, register, post, edit, delete."""
 from __future__ import annotations
 
 from typing import Optional
@@ -10,10 +10,12 @@ import discord
 from discord import app_commands
 
 from bot.checks import admin_only, mod_or_higher
-from bot.models import Player, Registration, Tournament, init_db
+from bot.models import Player, Registration, Tournament, TournamentSignupMessage, init_db
 from bot.models.base import get_async_session
 from bot.services.rl_api import RLAPIService
 import config
+
+SIGNUP_EMOJI = "📝"  # React to sign up
 
 FORMAT_CHOICES = [
     app_commands.Choice(name="1v1", value="1v1"),
@@ -130,7 +132,7 @@ async def register_cmd(interaction: discord.Interaction, tournament_id: int) -> 
         player = await get_player(session, interaction.user.id)
         if not player:
             await interaction.followup.send(
-                "Register your Epic ID first with `/register epic_id`.",
+                "Register first with `/register`.",
                 ephemeral=True,
             )
             return
