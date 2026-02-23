@@ -26,8 +26,13 @@ const TAB_STORAGE_KEY = 'octane-selected-tab';
 
 /** Convert UTC ISO string to datetime-local value (local timezone). */
 function utcToDatetimeLocal(isoStr) {
-  if (!isoStr) return '';
-  const d = new Date(isoStr);
+  if (isoStr == null || isoStr === '') return '';
+  const s = String(isoStr).trim();
+  if (!s) return '';
+  // Treat as UTC if no timezone (Python naive datetime)
+  const normalized = s.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(s) ? s : s.replace(/\.\d+$/, '') + 'Z';
+  const d = new Date(normalized);
+  if (isNaN(d.getTime())) return '';
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
@@ -37,6 +42,19 @@ function toDiscordTimestamp(datetimeLocalValue, style = 'R') {
   if (!datetimeLocalValue) return null;
   const ts = Math.floor(new Date(datetimeLocalValue).getTime() / 1000);
   return `<t:${ts}:${style}>`;
+}
+
+/** Parse Discord timestamp <t:1234567890:R> or similar, return datetime-local string or null. */
+function parseDiscordTimestamp(str) {
+  if (!str || typeof str !== 'string') return null;
+  const m = str.match(/<t:(\d+):[^>]*>/);
+  if (!m) return null;
+  const ts = parseInt(m[1], 10);
+  if (isNaN(ts)) return null;
+  const d = new Date(ts * 1000);
+  if (isNaN(d.getTime())) return null;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 async function parseJson(res) {
@@ -1371,8 +1389,11 @@ function App() {
   const [activeTab, setActiveTab] = useState('players');
   const [newTournamentName, setNewTournamentName] = useState('');
   const [newTournamentFormat, setNewTournamentFormat] = useState('1v1');
+  const [newTournamentDeadline, setNewTournamentDeadline] = useState('');
   const [bracketType, setBracketType] = useState('single_elim');
   const [renameValue, setRenameValue] = useState('');
+  const [deadlineValue, setDeadlineValue] = useState('');
+  const [copyFeedback, setCopyFeedback] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuSection, setMenuSection] = useState(null); // null | 'rename' | 'create' | 'deadline'
 
@@ -1991,17 +2012,16 @@ function App() {
                 <div style={{ position: 'fixed', inset: 0, zIndex: 10 }} onClick={() => { setMenuOpen(false); setMenuSection(null); }} aria-hidden="true" />
                 <div
                   style={{
-                    position: 'absolute',
-                    top: '100%',
-                    left: 0,
-                    marginTop: 4,
-                    minWidth: 260,
+                    position: (menuSection === 'deadline' || menuSection === 'create') ? 'fixed' : 'absolute',
+                    ...(menuSection === 'deadline' || menuSection === 'create'
+                      ? { top: '50%', left: '50%', transform: 'translate(-50%, -50%)', minWidth: 360, maxWidth: 'min(420px, 95vw)' }
+                      : { top: '100%', left: 0, marginTop: 4, minWidth: 260 }),
                     background: 'var(--bg-secondary)',
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius)',
                     boxShadow: 'var(--shadow)',
                     zIndex: 20,
-                    padding: 12,
+                    padding: 16,
                   }}
                 >
                   {menuSection === null ? (
@@ -2014,7 +2034,7 @@ function App() {
                           <button onClick={() => { setMenuSection('rename'); setRenameValue(tournaments.find((t) => t.id === tournamentId)?.name ?? ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}>
                             Rename
                           </button>
-                          <button onClick={() => { setMenuSection('deadline'); const d = tournaments.find((t) => t.id === tournamentId)?.registration_deadline; setDeadlineValue(d ? utcToDatetimeLocal(d) : ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Registration signup deadline">
+                          <button onClick={async () => { setMenuSection('deadline'); const list = await fetchTournaments(); const d = list?.find((t) => t.id === tournamentId)?.registration_deadline; setDeadlineValue(d ? utcToDatetimeLocal(d) : ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Registration signup deadline">
                             Set deadline
                           </button>
                           <button onClick={() => { cloneTournament(); setMenuOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Copy participants and standby to a new tournament">
@@ -2039,7 +2059,7 @@ function App() {
                         </>
                       )}
                       <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0' }} />
-                      <button onClick={() => { setMenuSection('create'); setNewTournamentName(''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px' }}>
+                      <button onClick={() => { setMenuSection('create'); setNewTournamentName(''); setNewTournamentDeadline(''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px' }}>
                         Create new tournament
                       </button>
                     </>
@@ -2063,17 +2083,34 @@ function App() {
                   ) : menuSection === 'deadline' ? (
                     <div>
                       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Signup deadline</div>
+                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Paste from Discord (e.g. &lt;t:1771834500:R&gt;)</label>
                       <input
-                        type="datetime-local"
-                        value={deadlineValue}
-                        onChange={(e) => setDeadlineValue(e.target.value)}
-                        style={{ width: '100%', marginBottom: 8 }}
-                        autoFocus
+                        type="text"
+                        placeholder="<t:1771834500:R>"
+                        onPaste={(e) => { const v = parseDiscordTimestamp(e.clipboardData.getData('text')); if (v) { e.preventDefault(); setDeadlineValue(v); } }}
+                        onChange={(e) => { const v = parseDiscordTimestamp(e.target.value); if (v) setDeadlineValue(v); }}
+                        style={{ width: '100%', marginBottom: 12, padding: '8px 10px', fontSize: 13 }}
                       />
+                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Or pick date and time</label>
+                      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+                        <input
+                          type="date"
+                          value={deadlineValue ? deadlineValue.slice(0, 10) : ''}
+                          onChange={(e) => setDeadlineValue(e.target.value ? e.target.value + 'T' + (deadlineValue ? deadlineValue.slice(11, 16) : '18:00') : '')}
+                          style={{ flex: 1, minWidth: 140, padding: '8px 10px' }}
+                          autoFocus
+                        />
+                        <input
+                          type="time"
+                          value={deadlineValue ? deadlineValue.slice(11, 16) : '18:00'}
+                          onChange={(e) => setDeadlineValue((deadlineValue ? deadlineValue.slice(0, 10) : new Date().toISOString().slice(0, 10)) + 'T' + e.target.value)}
+                          style={{ flex: 1, minWidth: 100, padding: '8px 10px' }}
+                        />
+                      </div>
                       {deadlineValue && (
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-                          Copy for Discord: <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(deadlineValue, 'R')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '2px 6px', marginRight: 4 }}>relative (:R)</button>
-                          <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(deadlineValue, 'F')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '2px 6px', marginRight: 4 }}>full (:F)</button>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
+                          Copy for Discord: <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(deadlineValue, 'R')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '4px 8px', marginRight: 6 }}>relative (:R)</button>
+                          <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(deadlineValue, 'F')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '4px 8px', marginRight: 6 }}>full (:F)</button>
                           {copyFeedback && <span style={{ color: 'var(--success)', marginLeft: 4 }}>{copyFeedback}</span>}
                         </div>
                       )}
@@ -2126,16 +2163,33 @@ function App() {
                         <option value="4v4">4v4</option>
                       </select>
                       <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Signup deadline (optional)</label>
+                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Paste from Discord (e.g. &lt;t:1771834500:R&gt;)</label>
                       <input
-                        type="datetime-local"
-                        value={newTournamentDeadline}
-                        onChange={(e) => setNewTournamentDeadline(e.target.value)}
-                        style={{ width: '100%', marginBottom: 8 }}
+                        type="text"
+                        placeholder="<t:1771834500:R>"
+                        onPaste={(e) => { const v = parseDiscordTimestamp(e.clipboardData.getData('text')); if (v) { e.preventDefault(); setNewTournamentDeadline(v); } }}
+                        onChange={(e) => { const v = parseDiscordTimestamp(e.target.value); if (v) setNewTournamentDeadline(v); }}
+                        style={{ width: '100%', marginBottom: 8, padding: '8px 10px', fontSize: 13 }}
                       />
+                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Or pick date and time</label>
+                      <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
+                        <input
+                          type="date"
+                          value={newTournamentDeadline ? newTournamentDeadline.slice(0, 10) : ''}
+                          onChange={(e) => setNewTournamentDeadline(e.target.value ? e.target.value + 'T' + (newTournamentDeadline ? newTournamentDeadline.slice(11, 16) : '18:00') : '')}
+                          style={{ flex: 1, minWidth: 140, padding: '8px 10px' }}
+                        />
+                        <input
+                          type="time"
+                          value={newTournamentDeadline ? newTournamentDeadline.slice(11, 16) : '18:00'}
+                          onChange={(e) => setNewTournamentDeadline((newTournamentDeadline ? newTournamentDeadline.slice(0, 10) : new Date().toISOString().slice(0, 10)) + 'T' + e.target.value)}
+                          style={{ flex: 1, minWidth: 100, padding: '8px 10px' }}
+                        />
+                      </div>
                       {newTournamentDeadline && (
                         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-                          Copy for Discord: <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(newTournamentDeadline, 'R')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '2px 6px', marginRight: 4 }}>relative (:R)</button>
-                          <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(newTournamentDeadline, 'F')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '2px 6px', marginRight: 4 }}>full (:F)</button>
+                          Copy for Discord: <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(newTournamentDeadline, 'R')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '4px 8px', marginRight: 6 }}>relative (:R)</button>
+                          <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(newTournamentDeadline, 'F')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '4px 8px', marginRight: 6 }}>full (:F)</button>
                           {copyFeedback && <span style={{ color: 'var(--success)', marginLeft: 4 }}>{copyFeedback}</span>}
                         </div>
                       )}

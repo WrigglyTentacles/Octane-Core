@@ -573,6 +573,7 @@ class TournamentUpdate(BaseModel):
     name: Optional[str] = None
     format: Optional[str] = None
     status: Optional[str] = None
+    registration_deadline: Optional[str] = None  # ISO datetime; empty string to clear
 
 
 @router.patch("/tournaments/{tournament_id}")

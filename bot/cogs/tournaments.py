@@ -1,10 +1,11 @@
 """Tournaments cog - /tournament create, list, register, post, edit, delete."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete as sql_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import discord
@@ -72,11 +73,45 @@ async def get_tournament(session: AsyncSession, tournament_id: int, guild_id: in
     return result.scalar_one_or_none()
 
 
+def _build_signup_embed(t: Tournament, count: int) -> discord.Embed:
+    """Build the signup embed for a tournament."""
+    deadline_line = ""
+    if t.registration_deadline:
+        dt = t.registration_deadline
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        ts = int(dt.timestamp())
+        deadline_line = f"**Signup deadline:** <t:{ts}:F> (<t:{ts}:R>)\n\n"
+    embed = discord.Embed(
+        title=f"📋 {t.name}",
+        description=(
+            f"**Format:** {t.format}\n"
+            f"**MMR Playlist:** {t.mmr_playlist}\n\n"
+            f"{deadline_line}"
+            f"React with {SIGNUP_EMOJI} to sign up!\n"
+            f"Remove your reaction to drop out.\n\n"
+            f"*Or use `/tournament register` with ID **{t.id}***"
+        ),
+        color=discord.Color.green(),
+    )
+    embed.set_footer(text=f"Tournament ID: {t.id} • {count} signed up")
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
 def _parse_deadline(s: str) -> Optional[datetime]:
-    """Parse deadline string (YYYY-MM-DD HH:mm or ISO format) to UTC datetime."""
+    """Parse deadline string (YYYY-MM-DD HH:mm, ISO, or <t:unix:R>) to UTC datetime."""
     s = s.strip()
     if not s:
         return None
+    # Discord timestamp: <t:1771834500:R> or <t:1771834500:F>
+    m = re.search(r"<t:(\d+):[^>]*>", s)
+    if m:
+        try:
+            ts = int(m.group(1))
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except (ValueError, OSError):
+            pass
     for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S"):
         try:
             dt = datetime.strptime(s, fmt)
@@ -196,16 +231,17 @@ async def register_cmd(interaction: discord.Interaction, tournament_id: int) -> 
         if t.status != "open":
             await interaction.followup.send(f"Tournament is {t.status}, registration closed.", ephemeral=True)
             return
-        if t.registration_deadline and datetime.now(timezone.utc) > t.registration_deadline:
-            dt = t.registration_deadline
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            ts = int(dt.timestamp())
-            await interaction.followup.send(
-                f"Registration closed. Deadline was <t:{ts}:F>.",
-                ephemeral=True,
-            )
-            return
+        if t.registration_deadline:
+            deadline = t.registration_deadline
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > deadline:
+                ts = int(deadline.timestamp())
+                await interaction.followup.send(
+                    f"Registration closed. Deadline was <t:{ts}:F>.",
+                    ephemeral=True,
+                )
+                return
         existing = await session.execute(
             select(Registration).where(
                 Registration.tournament_id == tournament_id,
@@ -297,28 +333,16 @@ async def post(
             select(Registration).where(Registration.tournament_id == tournament_id)
         )
         count = len(reg_count.scalars().all())
+        embed = _build_signup_embed(t, count)
 
-        deadline_line = ""
-        if t.registration_deadline:
-            dt = t.registration_deadline
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            ts = int(dt.timestamp())
-            deadline_line = f"**Signup deadline:** <t:{ts}:F> (<t:{ts}:R>)\n\n"
-        embed = discord.Embed(
-            title=f"📋 {t.name}",
-            description=(
-                f"**Format:** {t.format}\n"
-                f"**MMR Playlist:** {t.mmr_playlist}\n\n"
-                f"{deadline_line}"
-                f"React with {SIGNUP_EMOJI} to sign up!\n"
-                f"Remove your reaction to drop out.\n\n"
-                f"*Or use `/tournament register` with ID **{t.id}***"
-            ),
-            color=discord.Color.green(),
+        # Retire old signup messages so only this post is active (avoids duplicate posts confusion)
+        old_result = await session.execute(
+            select(TournamentSignupMessage).where(TournamentSignupMessage.tournament_id == tournament_id)
         )
-        embed.set_footer(text=f"Tournament ID: {t.id} • {count} signed up")
-        embed.timestamp = discord.utils.utcnow()
+        had_old = len(old_result.scalars().all()) > 0
+        await session.execute(
+            sql_delete(TournamentSignupMessage).where(TournamentSignupMessage.tournament_id == tournament_id)
+        )
 
         try:
             if target_channel.type == discord.ChannelType.forum:
@@ -358,10 +382,16 @@ async def post(
         )
         await session.commit()
 
-        await interaction.followup.send(
-            f"Posted signup for **{t.name}** in {target_channel.mention}. Users can react with {SIGNUP_EMOJI} to sign up.",
-            ephemeral=True,
-        )
+        followup = f"Posted signup for **{t.name}** in {target_channel.mention}. Users can react with {SIGNUP_EMOJI} to sign up."
+        if had_old:
+            followup += " Previous signup post(s) were retired — delete the old message(s) if still visible to avoid confusion."
+        if t.registration_deadline:
+            dt = t.registration_deadline
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            ts = int(dt.timestamp())
+            followup += f"\n\n**Copy for announcements:** `<t:{ts}:R>` or `<t:{ts}:F>`"
+        await interaction.followup.send(followup, ephemeral=True)
         return
 
 
@@ -406,7 +436,38 @@ async def edit(
         if deadline is not None:
             t.registration_deadline = _parse_deadline(deadline) if deadline.strip() else None
         await session.commit()
-        await interaction.followup.send(f"Updated tournament **{t.name}**.", ephemeral=True)
+        await session.refresh(t)
+
+        # If deadline changed, try to update existing signup embed
+        signup_updated = False
+        signup_failed = False
+        if deadline is not None:
+            result = await session.execute(
+                select(TournamentSignupMessage).where(
+                    TournamentSignupMessage.tournament_id == tournament_id,
+                )
+            )
+            signup_msgs = result.scalars().all()
+            reg_count = len(
+                (await session.execute(select(Registration).where(Registration.tournament_id == tournament_id))).scalars().all()
+            )
+            embed = _build_signup_embed(t, reg_count)
+            for sm in signup_msgs:
+                try:
+                    ch = interaction.client.get_channel(sm.channel_id) or await interaction.client.fetch_channel(sm.channel_id)
+                    msg = await ch.fetch_message(sm.message_id)
+                    await msg.edit(embed=embed)
+                    signup_updated = True
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    signup_failed = True
+
+        followup = f"Updated tournament **{t.name}**."
+        if deadline is not None:
+            if signup_updated:
+                followup += " Updated the signup post with the new deadline."
+            elif signup_failed:
+                followup += " There is a signup post but I couldn't update it (deleted or no permission). Repost with `/tournament post` to show the deadline."
+        await interaction.followup.send(followup, ephemeral=True)
         return
 
 
