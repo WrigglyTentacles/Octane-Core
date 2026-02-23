@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 
 from bot.checks import mod_or_higher
-from bot.models import Bracket, BracketMatch, Player, Registration, Team, Tournament, init_db
+from bot.models import Bracket, BracketMatch, Player, Registration, Team, Tournament
 from bot.models.base import get_async_session
 from bot.services.bracket_gen import create_single_elim_bracket
 from bot.services.rl_api import RLAPIService
@@ -60,7 +60,6 @@ async def generate(interaction: discord.Interaction, tournament_id: int) -> None
     rl_service = RLAPIService(config.RLAPI_CLIENT_ID, config.RLAPI_CLIENT_SECRET)
     try:
         async for session in get_async_session():
-            await init_db()
             t = await get_tournament(session, tournament_id, interaction.guild_id)
             if not t:
                 await interaction.followup.send("Tournament not found.", ephemeral=True)
@@ -97,7 +96,6 @@ async def view(interaction: discord.Interaction, tournament_id: int) -> None:
     await interaction.response.defer()
 
     async for session in get_async_session():
-        await init_db()
         t = await get_tournament(session, tournament_id, interaction.guild_id)
         if not t:
             await interaction.followup.send("Tournament not found.")

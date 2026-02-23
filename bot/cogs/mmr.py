@@ -10,10 +10,12 @@ from sqlalchemy.orm import selectinload
 import discord
 from discord import app_commands
 
-from bot.models import Player, Registration, Tournament, init_db
+from bot.models import Player, Registration, Tournament
 from bot.models.base import get_async_session
 from bot.services.rl_api import RLAPIService
 import config
+
+RLAPI_ERROR_MSG = "MMR lookup is unavailable. Check RLAPI_CLIENT_ID and RLAPI_CLIENT_SECRET in .env (Epic Developer Portal)."
 
 PLAYLIST_CHOICES = [
     app_commands.Choice(name="Solo Duel", value="solo_duel"),
@@ -133,14 +135,17 @@ async def leaderboard(interaction: discord.Interaction, tournament: str) -> None
         mmr_list: list[tuple[Player, int | None]] = []
         try:
             for reg in regs:
-                player_data = await rl_service.get_player_data(
-                    epic_id=reg.player.epic_id, epic_username=reg.player.epic_username
-                )
-                if player_data:
-                    info = rl_service.get_playlist_mmr(player_data, t.mmr_playlist)
-                    mmr_list.append((reg.player, info[0] if info else None))
-                else:
-                    mmr_list.append((reg.player, None))
+                try:
+                    player_data = await rl_service.get_player_data(
+                        epic_id=reg.player.epic_id, epic_username=reg.player.epic_username
+                    )
+                    if player_data:
+                        info = rl_service.get_playlist_mmr(player_data, t.mmr_playlist)
+                        mmr_list.append((reg.player, info[0] if info else None))
+                    else:
+                        mmr_list.append((reg.player, None))
+                except (Exception, KeyError):
+                    mmr_list.append((reg.player, None))  # Skip MMR for this player
         finally:
             await rl_service.close()
 

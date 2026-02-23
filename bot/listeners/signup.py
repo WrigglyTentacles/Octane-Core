@@ -6,7 +6,7 @@ from sqlalchemy import delete, select
 import discord
 from discord.ext import commands
 
-from bot.models import Player, Registration, Tournament, TournamentSignupMessage, init_db
+from bot.models import Player, Registration, Tournament, TournamentSignupMessage
 from bot.models.base import get_async_session
 
 SIGNUP_EMOJI = "📝"
@@ -31,7 +31,6 @@ async def _handle_reaction_add(payload: discord.RawReactionActionEvent, bot: com
         return
 
     async for session in get_async_session():
-        await init_db()
         result = await session.execute(
             select(TournamentSignupMessage).where(
                 TournamentSignupMessage.message_id == payload.message_id,
@@ -96,7 +95,6 @@ async def _handle_reaction_remove(payload: discord.RawReactionActionEvent, bot: 
         return
 
     async for session in get_async_session():
-        await init_db()
         result = await session.execute(
             select(TournamentSignupMessage).where(
                 TournamentSignupMessage.message_id == payload.message_id,

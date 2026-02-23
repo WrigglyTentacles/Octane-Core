@@ -9,10 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import discord
 from discord import app_commands
 
-from bot.models import Player, init_db
+from bot.models import Player
 from bot.models.base import get_async_session
 from bot.services.rl_api import RLAPIService
 import config
+
+# rlapi can raise HTTPException (invalid credentials) or KeyError (internal bug on error path)
+RLAPI_ERROR_MSG = "MMR lookup is unavailable. Check RLAPI_CLIENT_ID and RLAPI_CLIENT_SECRET in .env (Epic Developer Portal)."
 
 
 async def get_player(session: AsyncSession, discord_id: int) -> Optional[Player]:
@@ -28,7 +31,6 @@ async def register(interaction: discord.Interaction) -> None:
 
     display_name = interaction.user.display_name or str(interaction.user)
     async for session in get_async_session():
-        await init_db()
         existing = await get_player(session, interaction.user.id)
         if existing:
             existing.display_name = display_name
@@ -112,6 +114,9 @@ async def mmrcheck(interaction: discord.Interaction, username: str) -> None:
     rl_service = RLAPIService(config.RLAPI_CLIENT_ID, config.RLAPI_CLIENT_SECRET)
     try:
         player_data = await rl_service.get_player_by_epic_name(username)
+    except (Exception, KeyError):
+        await interaction.followup.send(RLAPI_ERROR_MSG, ephemeral=True)
+        return
     finally:
         await rl_service.close()
 

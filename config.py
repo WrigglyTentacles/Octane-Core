@@ -21,7 +21,7 @@ DATABASE_URL = os.getenv(
     f"sqlite+aiosqlite:///{Path(__file__).parent / 'octane.db'}",
 )
 
-# Role IDs (comma-separated)
+# Role IDs or names (comma-separated). Names are case-insensitive.
 def _parse_role_ids(value: str) -> set[int]:
     if not value:
         return set()
@@ -34,8 +34,20 @@ def _parse_role_ids(value: str) -> set[int]:
     return result
 
 
+def _parse_role_names(value: str) -> set[str]:
+    if not value:
+        return set()
+    return {x.strip().lower() for x in value.split(",") if x.strip()}
+
+
 MODERATOR_ROLE_IDS = _parse_role_ids(os.getenv("MODERATOR_ROLE_IDS", ""))
+MODERATOR_ROLE_NAMES = _parse_role_names(os.getenv("MODERATOR_ROLE_NAMES", ""))
 ADMIN_ROLE_IDS = _parse_role_ids(os.getenv("ADMIN_ROLE_IDS", ""))
+ADMIN_ROLE_NAMES = _parse_role_names(os.getenv("ADMIN_ROLE_NAMES", ""))
+
+# User IDs that bypass role checks (when Members Intent fails to return roles)
+MODERATOR_USER_IDS = _parse_role_ids(os.getenv("MODERATOR_USER_IDS", ""))
+ADMIN_USER_IDS = _parse_role_ids(os.getenv("ADMIN_USER_IDS", ""))
 
 # Web auth (JWT secret, initial admin bootstrap)
 JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production-use-long-random-string")

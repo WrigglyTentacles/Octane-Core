@@ -119,25 +119,24 @@ async def list_participants(tournament_id: int):
             .order_by(TournamentManualEntry.sort_order, TournamentManualEntry.id)
         )
         manual = [ManualEntryResponse.model_validate(e) for e in result.scalars().all()]
-        # Discord registrations (1v1 only; team format uses teams)
+        # Discord registrations (reaction signup or /tournament register)
         discord_list = []
-        if t.format == "1v1":
-            regs_result = await session.execute(
-                select(Registration)
-                .where(
-                    Registration.tournament_id == tournament_id,
-                    Registration.team_id.is_(None),
-                )
-                .options(selectinload(Registration.player))
+        regs_result = await session.execute(
+            select(Registration)
+            .where(
+                Registration.tournament_id == tournament_id,
+                Registration.team_id.is_(None),
             )
-            for reg in regs_result.scalars().all():
-                discord_list.append(
-                    DiscordRegistrationResponse(
-                        id=f"discord:{reg.player_id}",
-                        display_name=reg.player.display_name or str(reg.player_id),
-                        player_id=reg.player_id,
-                    )
+            .options(selectinload(Registration.player))
+        )
+        for reg in regs_result.scalars().all():
+            discord_list.append(
+                DiscordRegistrationResponse(
+                    id=f"discord:{reg.player_id}",
+                    display_name=reg.player.display_name or str(reg.player_id),
+                    player_id=reg.player_id,
                 )
+            )
         # Manual first, then Discord
         return manual + discord_list
 

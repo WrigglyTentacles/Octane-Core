@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 
 from bot.checks import mod_or_higher
-from bot.models import Player, Registration, Team, Tournament, init_db
+from bot.models import Player, Registration, Team, Tournament
 from bot.models.base import get_async_session
 
 
@@ -41,7 +41,6 @@ async def list_cmd(interaction: discord.Interaction, tournament_id: int) -> None
     await interaction.response.defer()
 
     async for session in get_async_session():
-        await init_db()
         t = await get_tournament(session, tournament_id, interaction.guild_id)
         if not t:
             await interaction.followup.send("Tournament not found.")
@@ -82,7 +81,6 @@ async def add(
     await interaction.response.defer(ephemeral=True)
 
     async for session in get_async_session():
-        await init_db()
         t = await get_tournament(session, tournament_id, interaction.guild_id)
         if not t:
             await interaction.followup.send("Tournament not found.", ephemeral=True)

@@ -1,6 +1,7 @@
 """Tournaments cog - /tournament create, list, register, post, edit, delete."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -10,12 +11,31 @@ import discord
 from discord import app_commands
 
 from bot.checks import admin_only, mod_or_higher
-from bot.models import Player, Registration, Tournament, TournamentSignupMessage, init_db
+from bot.models import Player, Registration, Tournament, TournamentSignupMessage
 from bot.models.base import get_async_session
 from bot.services.rl_api import RLAPIService
 import config
 
 SIGNUP_EMOJI = "📝"  # React to sign up
+
+
+async def _default_tournament_name(guild_id: int, format_str: str, session: AsyncSession) -> str:
+    """Generate default name: M-D-YYYY_format, with (x) suffix for duplicates."""
+    now = datetime.now(timezone.utc)
+    date_str = f"{now.month}-{now.day}-{now.year}"  # e.g. 2-23-2026
+    base = f"{date_str}_{format_str}"
+    # Escape _ for SQL LIKE (underscore is wildcard)
+    pattern = base.replace("_", "\\_") + "%"
+    result = await session.execute(
+        select(Tournament).where(
+            Tournament.guild_id == guild_id,
+            Tournament.name.like(pattern, escape="\\"),
+        )
+    )
+    existing = result.scalars().all()
+    count = len(existing)
+    return f"{base} ({count})" if count > 0 else base
+
 
 FORMAT_CHOICES = [
     app_commands.Choice(name="1v1", value="1v1"),
@@ -57,7 +77,7 @@ tournament_group = app_commands.Group(name="tournament", description="Tournament
 
 @tournament_group.command(name="create", description="Create a new tournament (Moderator+)")
 @app_commands.describe(
-    name="Tournament name",
+    name="Tournament name (optional, defaults to date_format e.g. 2-23-2026_2v2)",
     format="1v1, 2v2, or 3v3",
     mmr_playlist="Playlist to use for MMR seeding",
 )
@@ -65,18 +85,21 @@ tournament_group = app_commands.Group(name="tournament", description="Tournament
 @mod_or_higher()
 async def create(
     interaction: discord.Interaction,
-    name: str,
     format: str,
     mmr_playlist: str,
+    name: Optional[str] = None,
 ) -> None:
-    """Create a tournament."""
+    """Create a tournament. Name defaults to M-D-YYYY_format (e.g. 2-23-2026_2v2), with (1), (2) for duplicates."""
     if not interaction.guild_id:
         await interaction.response.send_message("Use this in a server.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
 
     async for session in get_async_session():
-        await init_db()
+        if not name or not name.strip():
+            name = await _default_tournament_name(interaction.guild_id, format, session)
+        else:
+            name = name.strip()
         t = Tournament(
             guild_id=interaction.guild_id,
             name=name,
@@ -128,7 +151,6 @@ async def register_cmd(interaction: discord.Interaction, tournament_id: int) -> 
     await interaction.response.defer(ephemeral=True)
 
     async for session in get_async_session():
-        await init_db()
         player = await get_player(session, interaction.user.id)
         if not player:
             await interaction.followup.send(
@@ -158,6 +180,43 @@ async def register_cmd(interaction: discord.Interaction, tournament_id: int) -> 
         return
 
 
+@tournament_group.command(name="unregister", description="Unregister from a tournament")
+@app_commands.describe(tournament_id="Tournament ID to unregister from")
+async def unregister_cmd(interaction: discord.Interaction, tournament_id: int) -> None:
+    """Unregister from a tournament."""
+    if not interaction.guild_id:
+        await interaction.response.send_message("Use this in a server.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    async for session in get_async_session():
+        t = await get_tournament(session, tournament_id, interaction.guild_id)
+        if not t:
+            await interaction.followup.send("Tournament not found.", ephemeral=True)
+            return
+        if t.status != "open":
+            await interaction.followup.send(
+                f"Tournament is {t.status}. Ask a moderator to remove you.",
+                ephemeral=True,
+            )
+            return
+        result = await session.execute(
+            select(Registration).where(
+                Registration.tournament_id == tournament_id,
+                Registration.player_id == interaction.user.id,
+                Registration.team_id.is_(None),
+            )
+        )
+        reg = result.scalar_one_or_none()
+        if not reg:
+            await interaction.followup.send("You're not registered for this tournament.", ephemeral=True)
+            return
+        await session.delete(reg)
+        await session.commit()
+        await interaction.followup.send(f"Unregistered from **{t.name}**.", ephemeral=True)
+        return
+
+
 @tournament_group.command(name="post", description="Post a signup message — users react to sign up (Moderator+)")
 @app_commands.describe(
     tournament_id="Tournament ID to post signup for",
@@ -181,7 +240,6 @@ async def post(
     await interaction.response.defer(ephemeral=True)
 
     async for session in get_async_session():
-        await init_db()
         t = await get_tournament(session, tournament_id, interaction.guild_id)
         if not t:
             await interaction.followup.send("Tournament not found.", ephemeral=True)
@@ -213,8 +271,32 @@ async def post(
         embed.set_footer(text=f"Tournament ID: {t.id} • {count} signed up")
         embed.timestamp = discord.utils.utcnow()
 
-        msg = await target_channel.send(embed=embed)
-        await msg.add_reaction(SIGNUP_EMOJI)
+        try:
+            if target_channel.type == discord.ChannelType.forum:
+                thread = await target_channel.create_thread(name=f"📋 {t.name} — Sign up", embed=embed)
+                msg = thread  # create_thread returns Thread; first message is the one we created
+                # Get the starter message to add reaction
+                starter = await thread.fetch_message(thread.id) if hasattr(thread, "fetch_message") else None
+                if starter is None:
+                    # Thread's starter message has same ID as thread
+                    try:
+                        starter = await thread.fetch_message(thread.id)
+                    except Exception:
+                        pass
+                if starter:
+                    await starter.add_reaction(SIGNUP_EMOJI)
+                msg_for_id = thread
+            else:
+                msg = await target_channel.send(embed=embed)
+                await msg.add_reaction(SIGNUP_EMOJI)
+                msg_for_id = msg
+        except discord.Forbidden:
+            await interaction.followup.send(
+                f"Missing Access: I can't post in {target_channel.mention}. "
+                "Ensure my role has Send Messages, Embed Links, Create Public Threads, and Add Reactions.",
+                ephemeral=True,
+            )
+            return
 
         session.add(
             TournamentSignupMessage(
