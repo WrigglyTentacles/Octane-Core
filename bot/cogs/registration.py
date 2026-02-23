@@ -34,38 +34,26 @@ async def register(interaction: discord.Interaction, epic_id: str) -> None:
 
     await interaction.response.defer(ephemeral=True)
 
-    rl_service = RLAPIService(config.RLAPI_CLIENT_ID, config.RLAPI_CLIENT_SECRET)
-    try:
-        player_data = await rl_service.get_player_by_epic_id(epic_id)
-    finally:
-        await rl_service.close()
-
-    if not player_data:
-        await interaction.followup.send(
-            "Could not find a player with that Epic ID. Please check it and try again.",
-            ephemeral=True,
-        )
-        return
-
+    display_name = interaction.user.display_name or str(interaction.user)
     async for session in get_async_session():
         await init_db()
         existing = await get_player(session, interaction.user.id)
         if existing:
             existing.epic_id = epic_id
-            existing.display_name = player_data.user_name
+            existing.display_name = display_name
         else:
             session.add(
                 Player(
                     discord_id=interaction.user.id,
                     epic_id=epic_id,
-                    display_name=player_data.user_name,
+                    display_name=display_name,
                 )
             )
         await session.commit()
         break
 
     await interaction.followup.send(
-        f"Successfully linked Epic ID to your account. Display name: **{player_data.user_name}**",
+        f"Successfully linked Epic ID `{epic_id}` to your account.",
         ephemeral=True,
     )
 
@@ -121,19 +109,6 @@ async def update_epic(interaction: discord.Interaction, epic_id: str) -> None:
 
     await interaction.response.defer(ephemeral=True)
 
-    rl_service = RLAPIService(config.RLAPI_CLIENT_ID, config.RLAPI_CLIENT_SECRET)
-    try:
-        player_data = await rl_service.get_player_by_epic_id(epic_id)
-    finally:
-        await rl_service.close()
-
-    if not player_data:
-        await interaction.followup.send(
-            "Could not find a player with that Epic ID. Please check it and try again.",
-            ephemeral=True,
-        )
-        return
-
     async for session in get_async_session():
         player = await get_player(session, interaction.user.id)
         if not player:
@@ -143,11 +118,11 @@ async def update_epic(interaction: discord.Interaction, epic_id: str) -> None:
             )
             return
         player.epic_id = epic_id
-        player.display_name = player_data.user_name
+        player.display_name = interaction.user.display_name or str(interaction.user)
         await session.commit()
         break
 
     await interaction.followup.send(
-        f"Successfully updated your Epic ID. Display name: **{player_data.user_name}**",
+        f"Successfully updated your Epic ID to `{epic_id}`.",
         ephemeral=True,
     )

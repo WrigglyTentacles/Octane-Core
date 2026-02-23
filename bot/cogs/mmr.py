@@ -33,53 +33,74 @@ async def get_player(session: AsyncSession, discord_id: int):
     return result.scalar_one_or_none()
 
 
-@app_commands.command(description="Show MMR and rank for a player")
+@app_commands.command(description="Show MMR and rank for a player or Epic ID")
 @app_commands.describe(
-    user="User to check (default: yourself)",
+    user="User to check (uses their registered Epic ID)",
+    epic_id="Or lookup by Epic ID directly (32-char hex)",
     playlist="Playlist to show MMR for (default: doubles)",
 )
 async def mmr(
     interaction: discord.Interaction,
     user: Optional[discord.Member] = None,
+    epic_id: Optional[str] = None,
     playlist: str = "doubles",
 ) -> None:
-    """Show MMR and rank."""
-    target = user or interaction.user
+    """Show MMR and rank. Use @user for registered players, or epic_id to lookup any Epic ID."""
     await interaction.response.defer()
 
-    async for session in get_async_session():
-        player = await get_player(session, target.id)
-        if not player:
+    lookup_epic_id = None
+    display_label = None
+
+    if epic_id:
+        epic_id = epic_id.strip().lower()
+        if len(epic_id) != 32 or not all(c in "0123456789abcdef" for c in epic_id):
             await interaction.followup.send(
-                f"{target.mention} hasn't registered an Epic ID yet." if user else "You haven't registered yet. Use `/register epic_id` first.",
-                ephemeral=not user,
+                "Invalid Epic ID. It should be a 32-character hexadecimal string.",
+                ephemeral=True,
             )
             return
-
-        rl_service = RLAPIService(config.RLAPI_CLIENT_ID, config.RLAPI_CLIENT_SECRET)
-        try:
-            player_data = await rl_service.get_player_by_epic_id(player.epic_id)
-            if not player_data:
-                await interaction.followup.send("Could not fetch player data from Rocket League API.")
+        lookup_epic_id = epic_id
+        display_label = f"Epic ID {epic_id[:8]}..."
+    else:
+        target = user or interaction.user
+        async for session in get_async_session():
+            player = await get_player(session, target.id)
+            if not player:
+                await interaction.followup.send(
+                    f"{target.mention} hasn't registered an Epic ID yet." if user else "You haven't registered yet. Use `/register epic_id` or pass an epic_id to lookup.",
+                    ephemeral=not user,
+                )
                 return
-            mmr_info = rl_service.get_playlist_mmr(player_data, playlist)
-        finally:
-            await rl_service.close()
+            lookup_epic_id = player.epic_id
+            display_label = target.display_name
+            break
 
-        if not mmr_info:
-            await interaction.followup.send(f"No {playlist} rank data found.")
+    rl_service = RLAPIService(config.RLAPI_CLIENT_ID, config.RLAPI_CLIENT_SECRET)
+    try:
+        player_data = await rl_service.get_player_by_epic_id(lookup_epic_id)
+        if not player_data:
+            await interaction.followup.send(
+                f"Could not fetch player data for that Epic ID. The ID may be invalid or the API may be unavailable."
+            )
             return
+        mmr_info = rl_service.get_playlist_mmr(player_data, playlist)
+    finally:
+        await rl_service.close()
 
-        skill, rank_str = mmr_info
-        embed = discord.Embed(
-            title=f"MMR — {target.display_name}",
-            color=discord.Color.green(),
-        )
-        embed.add_field(name="Playlist", value=playlist.replace("_", " ").title(), inline=True)
-        embed.add_field(name="Rank", value=rank_str, inline=True)
-        embed.add_field(name="MMR", value=str(skill), inline=True)
-        await interaction.followup.send(embed=embed)
+    if not mmr_info:
+        await interaction.followup.send(f"No {playlist} rank data found for that Epic ID.")
         return
+
+    skill, rank_str = mmr_info
+    embed = discord.Embed(
+        title=f"MMR — {display_label}",
+        color=discord.Color.green(),
+    )
+    embed.add_field(name="Epic", value=player_data.user_name or lookup_epic_id[:16] + "...", inline=False)
+    embed.add_field(name="Playlist", value=playlist.replace("_", " ").title(), inline=True)
+    embed.add_field(name="Rank", value=rank_str, inline=True)
+    embed.add_field(name="MMR", value=str(skill), inline=True)
+    await interaction.followup.send(embed=embed)
 
 
 @app_commands.command(description="Show leaderboard of registered players for a tournament")

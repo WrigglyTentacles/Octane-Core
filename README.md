@@ -14,11 +14,10 @@ Discord bot for Rocket League tournaments. Manages Epic ID registration, MMR-bas
 ## Setup
 
 1. **Discord**: Create application at [Discord Developer Portal](https://discord.com/developers/applications), get bot token
-2. **Epic Games**: Register at [Epic Developer Portal](https://dev.epicgames.com/), create client for `client_id` and `client_secret`
+2. **Epic Games** (optional): For MMR and bracket seeding, register at [Epic Developer Portal](https://dev.epicgames.com/) and set `RLAPI_CLIENT_ID` and `RLAPI_CLIENT_SECRET`. Registration works without these — Epic IDs are trusted (wrong IDs surface in private matches).
 3. **Environment**: Copy `.env.example` to `.env` and fill in:
-   - `DISCORD_TOKEN`
-   - `RLAPI_CLIENT_ID`
-   - `RLAPI_CLIENT_SECRET`
+   - `DISCORD_TOKEN` (required)
+   - `RLAPI_CLIENT_ID`, `RLAPI_CLIENT_SECRET` (optional, for MMR/leaderboard/bracket seeding)
    - Optional: `MODERATOR_ROLE_IDS`, `ADMIN_ROLE_IDS` (comma-separated)
 
 ## Run Bot
