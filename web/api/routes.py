@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from bot.models import User
 from web.auth import require_moderator_user
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -98,7 +98,7 @@ class SubstituteRequest(BaseModel):
 
 class TeamUpdate(BaseModel):
     name: str
-    member_ids: list[int]  # Manual entry IDs
+    member_ids: list[int | str]  # Manual entry IDs (int) or "discord:player_id" (str) for Discord signups
 
 
 class TeamsBulkUpdate(BaseModel):
@@ -391,10 +391,26 @@ async def update_teams(tournament_id: int, body: TeamsBulkUpdate, user: User = D
             team = Team(tournament_id=tournament_id, name=team_data.name or "Unnamed")
             session.add(team)
             await session.flush()
-            for i, eid in enumerate(team_data.member_ids):
-                entry = await session.get(TournamentManualEntry, eid)
-                if entry and entry.tournament_id == tournament_id:
-                    session.add(TeamManualMember(team_id=team.id, manual_entry_id=eid, sort_order=i))
+            for i, member_ref in enumerate(team_data.member_ids):
+                if isinstance(member_ref, str) and member_ref.startswith("discord:"):
+                    try:
+                        player_id = int(member_ref.replace("discord:", ""))
+                    except ValueError:
+                        continue
+                    reg_result = await session.execute(
+                        select(Registration).where(
+                            Registration.tournament_id == tournament_id,
+                            Registration.player_id == player_id,
+                        )
+                    )
+                    reg = reg_result.scalar_one_or_none()
+                    if reg:
+                        reg.team_id = team.id
+                else:
+                    eid = int(member_ref) if not isinstance(member_ref, int) else member_ref
+                    entry = await session.get(TournamentManualEntry, eid)
+                    if entry and entry.tournament_id == tournament_id:
+                        session.add(TeamManualMember(team_id=team.id, manual_entry_id=eid, sort_order=i))
             created.append({"id": team.id, "name": team.name})
         await session.commit()
         return {"ok": True, "teams": created}
@@ -412,18 +428,25 @@ async def list_teams(tournament_id: int):
         result = await session.execute(
             select(Team)
             .where(Team.tournament_id == tournament_id)
-            .options(selectinload(Team.manual_members).selectinload(TeamManualMember.manual_entry))
+            .options(
+                selectinload(Team.manual_members).selectinload(TeamManualMember.manual_entry),
+                selectinload(Team.members).selectinload(Registration.player),
+            )
         )
         teams = result.scalars().all()
+        members_by_team: dict[int, list[dict]] = {}
+        for team in teams:
+            manual = [
+                {"id": m.manual_entry.id, "display_name": m.manual_entry.display_name}
+                for m in sorted(team.manual_members, key=lambda x: x.sort_order)
+            ]
+            discord = [
+                {"id": f"discord:{r.player_id}", "display_name": (r.player.display_name or f"Player {r.player_id}")}
+                for r in team.members
+            ]
+            members_by_team[team.id] = manual + discord
         return [
-            {
-                "id": team.id,
-                "name": team.name,
-                "members": [
-                    {"id": m.manual_entry.id, "display_name": m.manual_entry.display_name}
-                    for m in sorted(team.manual_members, key=lambda x: x.sort_order)
-                ],
-            }
+            {"id": team.id, "name": team.name, "members": members_by_team.get(team.id, [])}
             for team in teams
         ]
 

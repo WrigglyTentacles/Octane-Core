@@ -622,33 +622,34 @@ function TeamsView({ teams, participants, standby, onUpdateTeams, onSubstitute, 
     const activeId = String(active.id);
     const overId = String(over.id);
     if (!activeId.startsWith('player-')) return;
-    const entryId = Number(activeId.replace('player-', ''));
+    const entryId = activeId.replace('player-', '');
+    const _sameId = (a, b) => a === b || String(a) === String(b);
     if (overId === 'unassigned') {
       const newTeams = teams.map((t) => ({
         id: t.id,
         name: t.name,
-        members: t.members.filter((m) => m.id !== entryId),
+        members: t.members.filter((m) => !_sameId(m.id, entryId)),
       })).filter((t) => t.members.length > 0 || t.id);
       onUpdateTeams(newTeams);
     } else if (overId.startsWith('player-')) {
-      const targetId = Number(overId.replace('player-', ''));
-      if (targetId === entryId) return;
-      const person = allPeople.find((p) => p.id === entryId);
-      const targetPerson = allPeople.find((p) => p.id === targetId);
+      const targetId = overId.replace('player-', '');
+      if (_sameId(targetId, entryId)) return;
+      const person = allPeople.find((p) => _sameId(p.id, entryId));
+      const targetPerson = allPeople.find((p) => _sameId(p.id, targetId));
       if (!person || !targetPerson) return;
-      const currentTeam = teams.find((t) => t.members.some((m) => m.id === entryId));
-      const targetTeam = teams.find((t) => t.members.some((m) => m.id === targetId));
+      const currentTeam = teams.find((t) => t.members.some((m) => _sameId(m.id, entryId)));
+      const targetTeam = teams.find((t) => t.members.some((m) => _sameId(m.id, targetId)));
       const newTeams = teams.map((t) => {
         const isCurrent = currentTeam && String(t.id) === String(currentTeam.id);
         const isTarget = targetTeam && String(t.id) === String(targetTeam.id);
         if (isCurrent && isTarget) {
-          return { ...t, members: t.members.map((m) => m.id === entryId ? { id: targetPerson.id, display_name: targetPerson.display_name } : m.id === targetId ? { id: person.id, display_name: person.display_name } : m) };
+          return { ...t, members: t.members.map((m) => _sameId(m.id, entryId) ? { id: targetPerson.id, display_name: targetPerson.display_name } : _sameId(m.id, targetId) ? { id: person.id, display_name: person.display_name } : m) };
         }
         if (isCurrent) {
-          return { ...t, members: t.members.map((m) => m.id === entryId ? { id: targetPerson.id, display_name: targetPerson.display_name } : m) };
+          return { ...t, members: t.members.map((m) => _sameId(m.id, entryId) ? { id: targetPerson.id, display_name: targetPerson.display_name } : m) };
         }
         if (isTarget) {
-          return { ...t, members: t.members.map((m) => m.id === targetId ? { id: person.id, display_name: person.display_name } : m) };
+          return { ...t, members: t.members.map((m) => _sameId(m.id, targetId) ? { id: person.id, display_name: person.display_name } : m) };
         }
         return t;
       });
@@ -657,18 +658,18 @@ function TeamsView({ teams, participants, standby, onUpdateTeams, onSubstitute, 
       const teamId = overId.replace('team-', '');
       const targetTeam = teams.find((t) => String(t.id) === teamId);
       if (!targetTeam || targetTeam.members.length >= maxPerTeam) return;
-      const currentTeam = teams.find((t) => t.members.some((m) => m.id === entryId));
-      const person = allPeople.find((p) => p.id === entryId);
+      const currentTeam = teams.find((t) => t.members.some((m) => _sameId(m.id, entryId)));
+      const person = allPeople.find((p) => _sameId(p.id, entryId));
       if (!person) return;
       let newTeams;
       if (currentTeam) {
         newTeams = teams.map((t) => {
           if (String(t.id) === teamId) {
-            if (t.members.some((m) => m.id === entryId)) return t;
+            if (t.members.some((m) => _sameId(m.id, entryId))) return t;
             return { ...t, members: [...t.members, { id: person.id, display_name: person.display_name }] };
           }
           if (String(t.id) === String(currentTeam.id)) {
-            return { ...t, members: t.members.filter((m) => m.id !== entryId) };
+            return { ...t, members: t.members.filter((m) => !_sameId(m.id, entryId)) };
           }
           return t;
         });
@@ -2007,9 +2008,20 @@ function App() {
         >
           <option value="">Select...</option>
           {tournaments.map((t) => (
-            <option key={t.id} value={t.id}>{t.name} ({t.format}){t.archived ? ' [archived]' : ''}</option>
+            <option key={t.id} value={t.id}>{t.name} ({t.format}) — {t.status === 'open' ? 'Open' : t.status === 'completed' ? 'Completed' : t.status === 'closed' ? 'Closed' : t.status} {t.archived ? '· archived' : ''}</option>
           ))}
         </select>
+        {tournamentId && (() => {
+          const t = tournaments.find((x) => x.id === tournamentId);
+          if (!t) return null;
+          const statusConfig = { open: { label: 'Open', color: 'var(--success)', bg: 'rgba(34,197,94,0.15)' }, completed: { label: 'Completed', color: '#eab308', bg: 'rgba(234,179,8,0.15)' }, closed: { label: 'Closed', color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' }, in_progress: { label: 'In progress', color: 'var(--accent)', bg: 'var(--accent-muted)' } };
+          const cfg = statusConfig[t.status] || { label: t.status, color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' };
+          return (
+            <span style={{ fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 20, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.color}40` }}>
+              {cfg.label}
+            </span>
+          );
+        })()}
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 14, color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showArchived} onChange={(e) => { setShowArchived(e.target.checked); fetchTournaments(e.target.checked); }} />
           Show archived
