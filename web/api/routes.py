@@ -1,10 +1,14 @@
 """API routes for tournament configuration and bracket management."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
+
+import config
 from pydantic import BaseModel, ConfigDict
 
 from bot.models import User
@@ -18,6 +22,7 @@ from bot.models import (
     BracketMatch,
     Player,
     Registration,
+    SiteSettings,
     Team,
     TeamManualMember,
     Tournament,
@@ -764,6 +769,71 @@ async def clone_tournament(
         await session.commit()
         await session.refresh(t)
         return {"id": t.id, "name": t.name, "format": t.format}
+
+
+class PostSignupRequest(BaseModel):
+    channel_id: Optional[int] = None
+    guild_id: Optional[int] = None
+
+
+@router.post("/tournaments/{tournament_id}/post-signup")
+async def post_signup_to_discord(
+    tournament_id: int,
+    body: Optional[PostSignupRequest] = None,
+    user: User = Depends(require_moderator_user),
+):
+    """Trigger the bot to post the signup message to Discord. Requires Discord settings configured in Settings."""
+    if not config.INTERNAL_API_SECRET:
+        raise HTTPException(503, "INTERNAL_API_SECRET not configured. Set it in .env to enable web-triggered signup.")
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            raise HTTPException(404, "Tournament not found")
+        if t.status != "open":
+            raise HTTPException(400, f"Tournament is {t.status}. Set status to 'open' before posting signup.")
+        # Get guild_id and channel_id from body or site settings
+        guild_id = body.guild_id if body and body.guild_id else None
+        channel_id = body.channel_id if body and body.channel_id else None
+        if not guild_id or not channel_id:
+            result = await session.execute(
+                select(SiteSettings).where(
+                    SiteSettings.key.in_(["discord_guild_id", "discord_signup_channel_id"])
+                )
+            )
+            settings = {row.key: row.value for row in result.scalars().all()}
+            try:
+                guild_id = guild_id or (int(settings["discord_guild_id"]) if settings.get("discord_guild_id") else None)
+                channel_id = channel_id or (int(settings["discord_signup_channel_id"]) if settings.get("discord_signup_channel_id") else None)
+            except (ValueError, TypeError):
+                guild_id = guild_id or None
+                channel_id = channel_id or None
+        if not guild_id or not channel_id:
+            raise HTTPException(
+                400,
+                "Configure Discord guild and channel in Settings (Discord signup) first, or pass channel_id and guild_id in the request body.",
+            )
+    url = f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-signup"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                url,
+                json={"tournament_id": tournament_id, "channel_id": channel_id, "guild_id": guild_id},
+                headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+            )
+    except httpx.ConnectError as e:
+        logging.getLogger("octane").warning("Failed to reach bot for post-signup: %s", e)
+        raise HTTPException(503, "Could not reach the Discord bot. Ensure it is running and BOT_INTERNAL_URL is correct.")
+    except Exception as e:
+        logging.getLogger("octane").exception("post-signup request failed")
+        raise HTTPException(503, str(e))
+    if r.status_code != 200:
+        try:
+            err = r.json()
+            msg = err.get("error", r.text)
+        except Exception:
+            msg = r.text
+        raise HTTPException(r.status_code if r.status_code < 500 else 503, msg)
+    return r.json()
 
 
 @router.delete("/tournaments/{tournament_id}")

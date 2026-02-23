@@ -25,6 +25,7 @@ export default function SettingsPage() {
     bg_primary: '',
     bg_secondary: '',
   });
+  const [discordSettings, setDiscordSettings] = useState({ enabled: false, discord_guild_id: '', discord_signup_channel_id: '', discord_signup_channel_name: '' });
 
   useEffect(() => {
     (async () => {
@@ -38,6 +39,14 @@ export default function SettingsPage() {
           accent_hover: data.accent_hover || '',
           bg_primary: data.bg_primary || '',
           bg_secondary: data.bg_secondary || '',
+        });
+        const dRes = await fetch(`${API}/settings/discord`);
+        const dData = await dRes.json();
+        setDiscordSettings({
+          enabled: !!dData.enabled,
+          discord_guild_id: dData.discord_guild_id || '',
+          discord_signup_channel_id: dData.discord_signup_channel_id || '',
+          discord_signup_channel_name: dData.discord_signup_channel_name || '',
         });
       } catch (err) {
         setError(err.message);
@@ -292,6 +301,24 @@ export default function SettingsPage() {
           {saving ? 'Saving...' : 'Save settings'}
         </button>
       </form>
+
+      {discordSettings.enabled && (
+        <div style={{ borderTop: '1px solid var(--border)', marginTop: 40, paddingTop: 32 }}>
+          <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Discord signup</h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: 16, fontSize: 14 }}>
+            Post signup messages to Discord from the web UI. Run <code style={{ background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>/tournament set-signup-channel</code> in your Discord server (in the channel where you want signups posted) to configure.
+          </p>
+          {discordSettings.discord_signup_channel_id ? (
+            <p style={{ color: 'var(--success)', fontSize: 14 }}>
+              ✓ Configured: #{discordSettings.discord_signup_channel_name || 'channel'}
+            </p>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>
+              Not configured yet. Run the command above in Discord, then refresh this page.
+            </p>
+          )}
+        </div>
+      )}
 
       <div style={{ borderTop: '1px solid var(--border)', marginTop: 40, paddingTop: 32 }}>
         <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Backup & restore</h2>

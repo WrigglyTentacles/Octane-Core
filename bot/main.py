@@ -33,6 +33,9 @@ class OctaneBot(commands.Bot):
 
     async def on_ready(self) -> None:
         logger.info("Bot ready: %s (ID: %s)", self.user, self.user.id if self.user else "?")
+        # Start internal HTTP server for web-triggered actions (post signup)
+        from bot.http_server import start_http_server
+        self.loop.create_task(start_http_server(self))
         # Guild-specific sync: commands appear instantly instead of waiting for global propagation
         guilds = list(self.guilds)
         logger.info("Syncing commands to %d guild(s)", len(guilds))

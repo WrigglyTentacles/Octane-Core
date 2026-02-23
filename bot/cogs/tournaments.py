@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 
 from bot.checks import admin_only, mod_or_higher
-from bot.models import Player, Registration, Tournament, TournamentSignupMessage
+from bot.models import Player, Registration, Team, Tournament, TournamentSignupMessage
 from bot.models.base import get_async_session
 from bot.services.rl_api import RLAPIService
 import config
@@ -256,6 +256,106 @@ async def register_cmd(interaction: discord.Interaction, tournament_id: int) -> 
         await session.commit()
         await interaction.followup.send(f"Registered for **{t.name}**!", ephemeral=True)
         return
+
+
+@tournament_group.command(name="status", description="Check if you're signed up for a tournament")
+@app_commands.describe(tournament_id="Tournament ID (optional — omit to list all open tournaments)")
+async def status_cmd(interaction: discord.Interaction, tournament_id: Optional[int] = None) -> None:
+    """Check signup status. With no ID, lists open tournaments and your status. With ID, shows status for that tournament."""
+    if not interaction.guild_id:
+        await interaction.response.send_message("Use this in a server.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    async for session in get_async_session():
+        if tournament_id is not None:
+            t = await get_tournament(session, tournament_id, interaction.guild_id)
+            if not t:
+                await interaction.followup.send("Tournament not found.", ephemeral=True)
+                return
+            result = await session.execute(
+                select(Registration).where(
+                    Registration.tournament_id == tournament_id,
+                    Registration.player_id == interaction.user.id,
+                )
+            )
+            reg = result.scalar_one_or_none()
+            if reg:
+                team_info = ""
+                if reg.team_id:
+                    team = await session.get(Team, reg.team_id)
+                    team_info = f" (Team: **{team.name}**)" if team else ""
+                await interaction.followup.send(
+                    f"✓ You're signed up for **{t.name}** ({t.format}){team_info}.",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    f"You're not signed up for **{t.name}** ({t.format}). React to the signup post or use `/tournament register {t.id}`.",
+                    ephemeral=True,
+                )
+            return
+
+        # List all open tournaments in guild
+        result = await session.execute(
+            select(Tournament)
+            .where(Tournament.guild_id == interaction.guild_id, Tournament.status == "open")
+            .order_by(Tournament.id.desc())
+            .limit(20)
+        )
+        tournaments = result.scalars().all()
+        if not tournaments:
+            await interaction.followup.send("No open tournaments in this server.", ephemeral=True)
+            return
+        reg_result = await session.execute(
+            select(Registration.tournament_id).where(
+                Registration.player_id == interaction.user.id,
+                Registration.tournament_id.in_([t.id for t in tournaments]),
+            )
+        )
+        signed_up_ids = {r[0] for r in reg_result.all()}
+        lines = []
+        for t in tournaments:
+            mark = "✓" if t.id in signed_up_ids else "✗"
+            lines.append(f"{mark} **{t.name}** (ID: {t.id}, {t.format})")
+        await interaction.followup.send(
+            "**Your signup status:**\n" + "\n".join(lines) + "\n\n*Use `/tournament status <id>` for details.*",
+            ephemeral=True,
+        )
+        return
+
+
+@tournament_group.command(name="set-signup-channel", description="Set this channel for web-triggered signup posts (Moderator+)")
+@mod_or_higher()
+async def set_signup_channel_cmd(interaction: discord.Interaction) -> None:
+    """Set the current channel as the signup channel. Use this in the channel where you want signup messages posted from the web UI."""
+    if not interaction.guild_id or not interaction.channel:
+        await interaction.response.send_message("Use this in a server channel.", ephemeral=True)
+        return
+    if not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.response.send_message("This command must be used in a text channel.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    async for session in get_async_session():
+        for key, value in [
+            ("discord_guild_id", str(interaction.guild_id)),
+            ("discord_signup_channel_id", str(interaction.channel.id)),
+            ("discord_signup_channel_name", interaction.channel.name),
+        ]:
+            result = await session.execute(select(SiteSettings).where(SiteSettings.key == key))
+            row = result.scalar_one_or_none()
+            if row:
+                row.value = value
+            else:
+                session.add(SiteSettings(key=key, value=value))
+        await session.commit()
+        break
+
+    await interaction.followup.send(
+        f"✓ Signup channel set to **#{interaction.channel.name}**. You can now post signup messages from the web UI.",
+        ephemeral=True,
+    )
 
 
 @tournament_group.command(name="unregister", description="Unregister from a tournament")

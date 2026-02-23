@@ -6,6 +6,8 @@ services:
       - octane-data:/data
     environment:
       - DATABASE_URL=sqlite+aiosqlite:////data/octane.db
+    ports:
+      - "8001:8001"  # Internal HTTP for web-triggered signup (optional, for local dev)
     restart: unless-stopped
 
   api:

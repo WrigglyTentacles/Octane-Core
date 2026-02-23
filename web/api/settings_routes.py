@@ -97,6 +97,18 @@ class SettingsImport(BaseModel):
     settings: dict[str, str]
 
 
+@router.get("/discord")
+async def get_discord_settings():
+    """Get Discord config for web-triggered signup. Only enabled when INTERNAL_API_SECRET is set."""
+    enabled = bool(config.INTERNAL_API_SECRET)
+    return {
+        "enabled": enabled,
+        "discord_guild_id": await _get_setting("discord_guild_id") or "",
+        "discord_signup_channel_id": await _get_setting("discord_signup_channel_id") or "",
+        "discord_signup_channel_name": await _get_setting("discord_signup_channel_name") or "",
+    }
+
+
 @router.post("/import")
 async def import_settings(body: SettingsImport, admin=Depends(require_admin_user)):
     """Restore site settings from a JSON backup (admin only). Overwrites existing keys."""

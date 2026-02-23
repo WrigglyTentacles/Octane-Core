@@ -1397,6 +1397,7 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuSection, setMenuSection] = useState(null); // null | 'rename' | 'create' | 'deadline'
   const [showArchived, setShowArchived] = useState(false);
+  const [discordConfigReady, setDiscordConfigReady] = useState(false);
 
   const fetchTournaments = async (includeArchived = showArchived) => {
     try {
@@ -1449,6 +1450,13 @@ function App() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    fetch(`${API}/settings/discord`).then((r) => r.ok ? r.json() : {}).then((d) => {
+      setDiscordConfigReady(!!(d?.enabled && d?.discord_guild_id && d?.discord_signup_channel_id));
+    }).catch(() => setDiscordConfigReady(false));
+  }, [menuOpen]);
 
   useEffect(() => {
     fetch(`${API}/settings`).then((r) => r.text()).then((text) => {
@@ -2045,6 +2053,25 @@ function App() {
                           <button onClick={async () => { setMenuSection('deadline'); const list = await fetchTournaments(); const d = list?.find((t) => t.id === tournamentId)?.registration_deadline; setDeadlineValue(d ? utcToDatetimeLocal(d) : ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Registration signup deadline">
                             Set deadline
                           </button>
+                          {discordConfigReady && tournaments.find((t) => t.id === tournamentId)?.status === 'open' && (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const res = await authFetch(`${API}/tournaments/${tournamentId}/post-signup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+                                  const data = await res.json();
+                                  if (!res.ok) throw new Error(data?.detail || 'Failed to post');
+                                  setError('');
+                                  setMenuOpen(false);
+                                } catch (err) {
+                                  setError(err.message);
+                                }
+                              }}
+                              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}
+                              title="Post signup message to Discord"
+                            >
+                              Post signup to Discord
+                            </button>
+                          )}
                           <button onClick={() => { cloneTournament(); setMenuOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Copy participants and standby to a new tournament">
                             Clone
                           </button>
