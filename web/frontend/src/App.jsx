@@ -2075,6 +2075,23 @@ function App() {
                           <button onClick={() => { cloneTournament(); setMenuOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Copy participants and standby to a new tournament">
                             Clone
                           </button>
+                          {['completed', 'closed'].includes(tournaments.find((t) => t.id === tournamentId)?.status) && (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await authFetch(`${API}/tournaments/${tournamentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'open' }) });
+                                  await fetchTournaments(showArchived);
+                                  setMenuOpen(false);
+                                } catch (err) {
+                                  setError(err.message);
+                                }
+                              }}
+                              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}
+                              title="Re-open registration"
+                            >
+                              Re-open tournament
+                            </button>
+                          )}
                           <button onClick={async () => { try { await authFetch(`${API}/tournaments/${tournamentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: !tournaments.find((t) => t.id === tournamentId)?.archived }) }); await fetchTournaments(showArchived); setMenuOpen(false); } catch (err) { setError(err.message); } }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Archive to hide from default list">
                             {tournaments.find((t) => t.id === tournamentId)?.archived ? 'Unarchive' : 'Archive'}
                           </button>

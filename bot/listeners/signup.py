@@ -1,11 +1,14 @@
 """Reaction-based tournament signup listener."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 
 import discord
+
+logger = logging.getLogger("octane.signup")
 from discord.ext import commands
 
 from bot.models import Player, Registration, Tournament, TournamentSignupMessage
@@ -46,6 +49,8 @@ async def _handle_reaction_add(payload: discord.RawReactionActionEvent, bot: com
         # Check tournament exists and is open
         t = await session.get(Tournament, signup_msg.tournament_id)
         if not t or t.status != "open":
+            if t and t.status != "open":
+                logger.info("Reaction signup ignored: tournament %s is %s", t.name, t.status)
             return
         if t.registration_deadline:
             deadline = t.registration_deadline

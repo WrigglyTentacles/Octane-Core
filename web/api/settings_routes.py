@@ -1,6 +1,7 @@
 """Site settings API: title, theme colors (public read, admin write)."""
 from __future__ import annotations
 
+import config
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel

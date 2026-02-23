@@ -452,22 +452,9 @@ async def post(
         try:
             if target_channel.type == discord.ChannelType.forum:
                 thread = await target_channel.create_thread(name=f"📋 {t.name} — Sign up", embed=embed)
-                msg = thread  # create_thread returns Thread; first message is the one we created
-                # Get the starter message to add reaction
-                starter = await thread.fetch_message(thread.id) if hasattr(thread, "fetch_message") else None
-                if starter is None:
-                    # Thread's starter message has same ID as thread
-                    try:
-                        starter = await thread.fetch_message(thread.id)
-                    except Exception:
-                        pass
-                if starter:
-                    await starter.add_reaction(SIGNUP_EMOJI)
-                msg_for_id = thread
+                msg = thread  # create_thread returns Thread; starter message ID = thread.id
             else:
                 msg = await target_channel.send(embed=embed)
-                await msg.add_reaction(SIGNUP_EMOJI)
-                msg_for_id = msg
         except discord.Forbidden:
             await interaction.followup.send(
                 f"Missing Access: I can't post in {target_channel.mention}. "
@@ -476,6 +463,7 @@ async def post(
             )
             return
 
+        # Commit signup message BEFORE adding reaction so reaction handler can find it (avoids race)
         session.add(
             TournamentSignupMessage(
                 message_id=msg.id,
@@ -486,6 +474,15 @@ async def post(
             )
         )
         await session.commit()
+
+        try:
+            if target_channel.type == discord.ChannelType.forum:
+                starter = await thread.fetch_message(thread.id)
+                await starter.add_reaction(SIGNUP_EMOJI)
+            else:
+                await msg.add_reaction(SIGNUP_EMOJI)
+        except discord.Forbidden:
+            pass  # Message already posted; reaction is optional
 
         followup = f"Posted signup for **{t.name}** in {target_channel.mention}. Users can react with {SIGNUP_EMOJI} to sign up."
         if had_old:

@@ -98,7 +98,6 @@ async def _handle_post_signup(request: aiohttp.web.Request) -> aiohttp.web.Respo
 
         try:
             msg = await channel.send(embed=embed)
-            await msg.add_reaction(SIGNUP_EMOJI)
         except Exception as e:
             logger.exception("Failed to post signup message")
             return aiohttp.web.json_response(
@@ -110,6 +109,7 @@ async def _handle_post_signup(request: aiohttp.web.Request) -> aiohttp.web.Respo
         if t.guild_id == 0:
             t.guild_id = guild_id
 
+        # Commit BEFORE adding reaction so reaction handler can find it (avoids race)
         session.add(
             TournamentSignupMessage(
                 message_id=msg.id,
@@ -120,6 +120,11 @@ async def _handle_post_signup(request: aiohttp.web.Request) -> aiohttp.web.Respo
             )
         )
         await session.commit()
+
+        try:
+            await msg.add_reaction(SIGNUP_EMOJI)
+        except Exception:
+            pass  # Message posted; reaction is optional
         break
 
     return aiohttp.web.json_response({"ok": True, "message_id": msg.id})
