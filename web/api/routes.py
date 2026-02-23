@@ -51,6 +51,10 @@ class ManualEntryReorder(BaseModel):
     entry_ids: list[int]
 
 
+class ManualEntryMove(BaseModel):
+    list_type: str  # "participant" | "standby"
+
+
 class BracketMatchUpdate(BaseModel):
     team1_id: Optional[int] = None
     team2_id: Optional[int] = None
@@ -257,6 +261,38 @@ async def remove_standby(tournament_id: int, entry_id: int, user: User = Depends
         return {"ok": True}
 
 
+@router.patch("/tournaments/{tournament_id}/manual-entries/{entry_id}/move")
+async def move_manual_entry(
+    tournament_id: int, entry_id: int, body: ManualEntryMove, user: User = Depends(require_moderator_user)
+):
+    """Move a manual entry between participants and standby."""
+    if body.list_type not in ("participant", "standby"):
+        raise HTTPException(400, "list_type must be 'participant' or 'standby'")
+    async with async_session_factory() as session:
+        entry = await session.get(TournamentManualEntry, entry_id)
+        if not entry or entry.tournament_id != tournament_id:
+            raise HTTPException(404, "Entry not found")
+        if entry.list_type == body.list_type:
+            await session.refresh(entry)
+            return ManualEntryResponse.model_validate(entry)
+        result = await session.execute(
+            select(TournamentManualEntry)
+            .where(
+                TournamentManualEntry.tournament_id == tournament_id,
+                TournamentManualEntry.list_type == body.list_type,
+            )
+        )
+        max_order = max((e.sort_order for e in result.scalars().all()), default=-1)
+        entry.list_type = body.list_type
+        entry.original_list_type = body.list_type
+        entry.sort_order = max_order + 1
+        if body.list_type == "standby":
+            await session.execute(delete(TeamManualMember).where(TeamManualMember.manual_entry_id == entry_id))
+        await session.commit()
+        await session.refresh(entry)
+        return ManualEntryResponse.model_validate(entry)
+
+
 @router.patch("/tournaments/{tournament_id}/standby/reorder")
 async def reorder_standby(tournament_id: int, body: ManualEntryReorder, user: User = Depends(require_moderator_user)):
     """Reorder standby entries."""
@@ -359,7 +395,6 @@ async def substitute_standby(tournament_id: int, body: SubstituteRequest):
         if not tmm:
             raise HTTPException(404, "Member not in this team")
         tmm.manual_entry_id = body.standby_entry_id
-        member_entry.list_type = "standby"
         standby_entry.list_type = "participant"
         await session.commit()
         return {"ok": True}
@@ -579,7 +614,10 @@ async def generate_bracket(tournament_id: int, body: Optional[GenerateBracketReq
         )
         if existing.scalar_one_or_none():
             raise HTTPException(400, "Bracket already exists")
-        bracket = await create_manual_bracket(session, tournament_id, req)
+        try:
+            bracket = await create_manual_bracket(session, tournament_id, req)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         if not bracket:
             raise HTTPException(400, "Could not generate bracket. Add participants first.")
         return {"ok": True, "bracket_id": bracket.id}
@@ -602,7 +640,10 @@ async def regenerate_bracket(tournament_id: int, body: Optional[GenerateBracketR
         if bracket:
             await session.delete(bracket)
             await session.flush()
-        bracket = await create_manual_bracket(session, tournament_id, req)
+        try:
+            bracket = await create_manual_bracket(session, tournament_id, req)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         if not bracket:
             raise HTTPException(400, "Could not generate bracket. Add participants first.")
         return {"ok": True, "bracket_id": bracket.id}

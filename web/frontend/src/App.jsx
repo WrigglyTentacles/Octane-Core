@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import {
@@ -21,6 +21,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 
 const API = '/api';
+const STORAGE_KEY = 'octane-selected-tournament';
+const TAB_STORAGE_KEY = 'octane-selected-tab';
 
 async function parseJson(res) {
   const text = await res.text();
@@ -153,18 +155,21 @@ function EditableList({ title, items, onAdd, onRemove, onReorder, onRename, addP
                       style={{ ...styles.input, flex: 1, margin: 0, padding: '4px 8px' }}
                     />
                   ) : (
-                    <span
-                      onDoubleClick={canRename ? () => startEdit(item) : undefined}
-                      style={{ flex: 1, cursor: canRename ? 'text' : 'default' }}
-                      title={canRename ? 'Double-click to rename' : undefined}
-                    >
-                      {label}
-                    </span>
+                    <span style={{ flex: 1 }}>{label}</span>
                   )}
-                  {!readOnly && removable && !isEditing && (
-                    <button onClick={() => onRemove(item.id)} style={{ color: 'var(--error)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px' }}>
-                      Remove
-                    </button>
+                  {!readOnly && !isEditing && (
+                    <>
+                      {canRename && (
+                        <button onClick={() => startEdit(item)} title="Rename" style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', fontSize: 14 }}>
+                          ✎
+                        </button>
+                      )}
+                      {removable && (
+                        <button onClick={() => onRemove(item.id)} style={{ color: 'var(--error)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px' }}>
+                          Remove
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               );
@@ -176,6 +181,199 @@ function EditableList({ title, items, onAdd, onRemove, onReorder, onRename, addP
             })}
           </div>
         </SortableContext>
+      </DndContext>
+    </div>
+  );
+}
+
+function RosterItem({ item, prefix, label, onRename, onRemove, onMoveUp, onMoveDown, canRemove, canRename, readOnly }) {
+  const id = `${prefix}-${item.id}`;
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id });
+  const [editing, setEditing] = useState(false);
+  const [editVal, setEditVal] = useState(item.display_name || '');
+
+  const saveRename = async () => {
+    const t = editVal.trim();
+    if (t && onRename) await onRename(item.id, t);
+    setEditing(false);
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...(!editing ? { ...attributes, ...listeners } : {})}
+      style={{
+        ...styles.listItem,
+        opacity: isDragging ? 0.5 : 1,
+        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+      }}
+    >
+      {editing ? (
+        <input
+          type="text"
+          value={editVal}
+          onChange={(e) => setEditVal(e.target.value)}
+          onBlur={saveRename}
+          onKeyDown={(e) => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') setEditing(false); }}
+          autoFocus
+          onClick={(e) => e.stopPropagation()}
+          style={{ ...styles.input, flex: 1, margin: 0, padding: '4px 8px' }}
+        />
+      ) : (
+        <span style={{ flex: 1 }}>{label}</span>
+      )}
+      {!readOnly && !editing && (
+        <>
+          {canRename && (
+            <button onClick={(e) => { e.stopPropagation(); setEditing(true); setEditVal(item.display_name || ''); }} title="Rename" style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', fontSize: 14 }}>
+              ✎
+            </button>
+          )}
+          {canRemove && (
+            <button onClick={(e) => { e.stopPropagation(); onRemove?.(item.id); }} style={{ color: 'var(--error)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px' }}>
+              Remove
+            </button>
+          )}
+          {onMoveUp && (
+            <button onClick={(e) => { e.stopPropagation(); onMoveUp(item.id); }} title="Move up" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', fontSize: 12 }}>↑</button>
+          )}
+          {onMoveDown && (
+            <button onClick={(e) => { e.stopPropagation(); onMoveDown(item.id); }} title="Move down" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', fontSize: 12 }}>↓</button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ParticipantsAndStandbyView({
+  participants,
+  standby,
+  onAddParticipant,
+  onAddStandby,
+  onRemoveParticipant,
+  onRemoveStandby,
+  onReorderParticipants,
+  onReorderStandby,
+  onRenameParticipant,
+  onRenameStandby,
+  onMoveEntry,
+  readOnly,
+}) {
+  const [newParticipant, setNewParticipant] = useState('');
+  const [newStandby, setNewStandby] = useState('');
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const handleDragEnd = (event) => {
+    const { active, over } = event;
+    if (!over) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    if (overId === 'zone-standby' && activeId.startsWith('p-')) {
+      const entryId = Number(activeId.replace('p-', ''));
+      onMoveEntry?.(entryId, 'standby');
+    } else if (overId === 'zone-participants' && activeId.startsWith('s-')) {
+      const entryId = Number(activeId.replace('s-', ''));
+      const item = standby.find((s) => s.id === entryId);
+      if (item?.list_type === 'standby') onMoveEntry?.(entryId, 'participant');
+    }
+  };
+
+  const moveUp = (list, id, onReorder) => {
+    const idx = list.findIndex((i) => i.id === id);
+    if (idx <= 0) return;
+    const ids = list.map((i) => i.id);
+    onReorder(arrayMove(ids, idx, idx - 1));
+  };
+  const moveDown = (list, id, onReorder) => {
+    const idx = list.findIndex((i) => i.id === id);
+    if (idx < 0 || idx >= list.length - 1) return;
+    const ids = list.map((i) => i.id);
+    onReorder(arrayMove(ids, idx, idx + 1));
+  };
+
+  return (
+    <div style={{ marginBottom: 32 }}>
+      <h3 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Players — drag between lists to move</h3>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+          <div>
+            <h4 style={{ margin: '0 0 12px', fontSize: 14, color: 'var(--accent)' }}>Participants</h4>
+            {!readOnly && (
+              <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                <input
+                  type="text"
+                  placeholder="Display name"
+                  value={newParticipant}
+                  onChange={(e) => setNewParticipant(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && newParticipant.trim() && (onAddParticipant?.(newParticipant.trim()), setNewParticipant(''))}
+                  style={styles.input}
+                />
+                <button onClick={() => newParticipant.trim() && (onAddParticipant?.(newParticipant.trim()), setNewParticipant(''))} disabled={!newParticipant.trim()} className="primary">Add</button>
+              </div>
+            )}
+            <DroppableZone id="zone-participants" minHeight={80}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {participants.map((item) => (
+                  <RosterItem
+                    key={item.id}
+                    item={item}
+                    prefix="p"
+                    label={item.display_name}
+                    onRename={onRenameParticipant}
+                    onRemove={onRemoveParticipant}
+                    onMoveUp={(id) => moveUp(participants, id, onReorderParticipants)}
+                    onMoveDown={(id) => moveDown(participants, id, onReorderParticipants)}
+                    canRemove={true}
+                    canRename={true}
+                    readOnly={readOnly}
+                  />
+                ))}
+              </div>
+            </DroppableZone>
+          </div>
+          <div>
+            <h4 style={{ margin: '0 0 12px', fontSize: 14, color: 'var(--accent)' }}>Standby / Seat Fillers</h4>
+            {!readOnly && (
+              <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                <input
+                  type="text"
+                  placeholder="Display name"
+                  value={newStandby}
+                  onChange={(e) => setNewStandby(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && newStandby.trim() && (onAddStandby?.(newStandby.trim()), setNewStandby(''))}
+                  style={styles.input}
+                />
+                <button onClick={() => newStandby.trim() && (onAddStandby?.(newStandby.trim()), setNewStandby(''))} disabled={!newStandby.trim()} className="primary">Add</button>
+              </div>
+            )}
+            <DroppableZone id="zone-standby" minHeight={80}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {standby.map((item) => {
+                  const inGame = item.original_list_type === 'standby' && item.list_type !== 'standby';
+                  return (
+                    <RosterItem
+                      key={item.id}
+                      item={item}
+                      prefix="s"
+                      label={item.display_name + (inGame ? ' (in game)' : '')}
+                      onRename={onRenameStandby}
+                      onRemove={inGame ? undefined : onRemoveStandby}
+                      onMoveUp={(id) => moveUp(standby, id, onReorderStandby)}
+                      onMoveDown={(id) => moveDown(standby, id, onReorderStandby)}
+                      canRemove={!inGame}
+                      canRename={true}
+                      readOnly={readOnly}
+                    />
+                  );
+                })}
+              </div>
+            </DroppableZone>
+          </div>
+        </div>
       </DndContext>
     </div>
   );
@@ -940,12 +1138,36 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
 }
 
 function App() {
-  const { canEdit, authFetch, user, logout, isAdmin } = useAuth();
+  const { canEdit, authFetch, user, logout, isAdmin, loading: authLoading } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      navigate('/login', { replace: true, state: { from: location } });
+    }
+  }, [authLoading, user, navigate, location]);
+
+  if (!authLoading && !user) {
+    return null;
+  }
   const [siteTitle, setSiteTitle] = useState('Octane Bracket Manager');
   const [tournaments, setTournaments] = useState([]);
-  const [tournamentId, setTournamentId] = useState(null);
+  const [tournamentId, setTournamentIdState] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? Number(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const setTournamentId = (id) => {
+    setTournamentIdState(id);
+    try {
+      if (id != null) localStorage.setItem(STORAGE_KEY, String(id));
+      else localStorage.removeItem(STORAGE_KEY);
+    } catch {}
+  };
   const [participants, setParticipants] = useState([]);
   const [standby, setStandby] = useState([]);
   const [teams, setTeams] = useState([]);
@@ -953,7 +1175,7 @@ function App() {
   const [previewBracket, setPreviewBracket] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState('participants');
+  const [activeTab, setActiveTab] = useState('players');
   const [newTournamentName, setNewTournamentName] = useState('');
   const [newTournamentFormat, setNewTournamentFormat] = useState('1v1');
   const [bracketType, setBracketType] = useState('single_elim');
@@ -966,7 +1188,12 @@ function App() {
       const data = await parseJson(res);
       const list = Array.isArray(data) ? data : [];
       setTournaments(list);
-      if (list.length && !tournamentId) setTournamentId(list[0].id);
+      if (list.length) {
+        const saved = (() => { try { const s = localStorage.getItem(STORAGE_KEY); return s ? Number(s) : null; } catch { return null; } })();
+        const valid = saved && list.some((t) => t.id === saved);
+        if (valid) setTournamentId(saved);
+        else setTournamentId(list[0].id);
+      }
       return list;
     } catch (err) {
       setError(err.message);
@@ -1025,21 +1252,49 @@ function App() {
     fetchData();
   }, [tournamentId]);
 
+  // Restore last tab on initial load when landing at /
+  const hasRestoredTab = useRef(false);
+  useEffect(() => {
+    if (hasRestoredTab.current || location.pathname !== '/') return;
+    if (!tournaments.length) return;
+    try {
+      const saved = localStorage.getItem(TAB_STORAGE_KEY);
+      if (saved === 'bracket') {
+        hasRestoredTab.current = true;
+        navigate('/bracket', { replace: true });
+      } else if (saved === 'teams') {
+        const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
+        if (fmt && fmt !== '1v1') {
+          hasRestoredTab.current = true;
+          navigate('/teams', { replace: true });
+        }
+      }
+    } catch {}
+  }, [tournaments, tournamentId, location.pathname, navigate]);
+
   // Sync activeTab with URL path so /teams, /bracket, etc. work
   useEffect(() => {
     const path = location.pathname;
-    const tabFromPath = path === '/' ? 'participants' : path.slice(1);
-    const validTabs = ['participants', 'standby', 'teams', 'bracket'];
+    if (path === '/participants' || path === '/standby') {
+      navigate('/', { replace: true });
+      return;
+    }
+    const tabFromPath = path === '/' ? 'players' : path.slice(1);
+    const validTabs = ['players', 'teams', 'bracket'];
     if (validTabs.includes(tabFromPath)) {
       const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
       const isTeamFormat = fmt && fmt !== '1v1';
-      if (tabFromPath === 'teams' && !isTeamFormat && tournamentId) {
+      const knowFormat = tournaments.length && tournamentId && fmt;
+      if (tabFromPath === 'teams' && knowFormat && !isTeamFormat) {
         navigate('/', { replace: true });
       } else {
         setActiveTab(tabFromPath);
+        try {
+          localStorage.setItem(TAB_STORAGE_KEY, tabFromPath);
+        } catch {}
       }
     }
-  }, [location.pathname, tournamentId, tournaments]);
+  }, [location.pathname, tournamentId, tournaments, navigate]);
 
   const fetchPreview = async () => {
     if (!tournamentId) return;
@@ -1157,6 +1412,19 @@ function App() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: displayName }),
+      });
+      await fetchData({ silent: true });
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const moveEntry = async (entryId, listType) => {
+    try {
+      await authFetch(`${API}/tournaments/${tournamentId}/manual-entries/${entryId}/move`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ list_type: listType }),
       });
       await fetchData({ silent: true });
     } catch (err) {
@@ -1537,11 +1805,11 @@ function App() {
           {(() => {
             const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
             const isTeamFormat = fmt && fmt !== '1v1';
-            const tabs = ['participants', 'standby', ...(isTeamFormat ? ['teams'] : []), 'bracket'];
+            const tabs = ['players', ...(isTeamFormat ? ['teams'] : []), 'bracket'];
             return (
               <div style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
                 {tabs.map((tab) => {
-                  const path = tab === 'participants' ? '/' : `/${tab}`;
+                  const path = tab === 'players' ? '/' : `/${tab}`;
                   return (
                     <Link
                       key={tab}
@@ -1551,28 +1819,27 @@ function App() {
                         textDecoration: 'none',
                       }}
                     >
-                      {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                      {tab === 'players' ? 'Players' : tab.charAt(0).toUpperCase() + tab.slice(1)}
                     </Link>
                   );
                 })}
               </div>
             );
           })()}
-          {activeTab === 'participants' && (
-            <EditableList title="Participants" items={participants} onAdd={addParticipant} onRemove={removeParticipant} onReorder={reorderParticipants} addPlaceholder="Display name" readOnly={!canEdit} />
-          )}
-          {activeTab === 'standby' && (
-            <EditableList
-              title="Standby / Seat Fillers"
-              items={standby}
-              onAdd={addStandby}
-              onRemove={removeStandby}
-              onReorder={reorderStandby}
-              onRename={renameStandby}
-              addPlaceholder="Display name"
+          {activeTab === 'players' && (
+            <ParticipantsAndStandbyView
+              participants={participants}
+              standby={standby}
+              onAddParticipant={addParticipant}
+              onAddStandby={addStandby}
+              onRemoveParticipant={removeParticipant}
+              onRemoveStandby={removeStandby}
+              onReorderParticipants={reorderParticipants}
+              onReorderStandby={reorderStandby}
+              onRenameParticipant={renameParticipant}
+              onRenameStandby={renameStandby}
+              onMoveEntry={moveEntry}
               readOnly={!canEdit}
-              canRemoveItem={(item) => item.list_type === 'standby'}
-              getItemLabel={(item) => item.display_name + (item.original_list_type === 'standby' && item.list_type !== 'standby' ? ' (in game)' : '')}
             />
           )}
           {activeTab === 'teams' && (
@@ -1587,7 +1854,11 @@ function App() {
               readOnly={!canEdit}
             />
           )}
-          {activeTab === 'bracket' && (
+          {activeTab === 'bracket' && (() => {
+            const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
+            const bracketCount = fmt === '1v1' ? participants.length : (teams?.length ?? 0);
+            const generateDisabled = !bracketCount || (bracketType === 'double_elim' && bracketCount < 8);
+            return (
             <div>
               {bracket?.error ? (
                 <div>
@@ -1595,12 +1866,12 @@ function App() {
                     <p style={{ color: 'var(--text-secondary)', marginBottom: 16 }}>{bracket.error}</p>
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
                       <label style={{ color: 'var(--text-secondary)' }}>Bracket type:</label>
-                      <select value={bracketType} onChange={(e) => setBracketType(e.target.value)} style={{ padding: '8px 12px' }}>
+                      <select value={bracketType} onChange={(e) => setBracketType(e.target.value)} style={{ padding: '8px 12px' }} title={bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
                         <option value="single_elim">Single elimination</option>
-                        <option value="double_elim">Double elimination</option>
+                        <option value="double_elim">Double elimination (8+ teams)</option>
                       </select>
                     </div>
-                    {canEdit && <button className="primary" onClick={generateBracket} disabled={tournaments.find((t) => t.id === tournamentId)?.format === '1v1' ? participants.length === 0 : (participants.length === 0 && (!teams || teams.length === 0))}>
+                    {canEdit && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
                       Generate Bracket
                     </button>}
                   </div>
@@ -1615,7 +1886,7 @@ function App() {
                 <div>
                   {canEdit && (
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
-                      <button onClick={regenerateBracket} disabled={loading} title="Replace bracket with a fresh one from current participants/teams">
+                      <button onClick={regenerateBracket} disabled={loading || generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : 'Replace bracket with a fresh one from current participants/teams'}>
                         Regenerate Bracket
                       </button>
                     </div>
@@ -1640,18 +1911,19 @@ function App() {
                   <p style={{ color: 'var(--text-secondary)', marginBottom: 16 }}>No bracket yet. Add participants{ tournaments.find((t) => t.id === tournamentId)?.format !== '1v1' ? ' and teams' : '' }, then generate.</p>
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
                     <label style={{ color: 'var(--text-secondary)' }}>Bracket type:</label>
-                    <select value={bracketType} onChange={(e) => setBracketType(e.target.value)} style={{ padding: '8px 12px' }}>
+                    <select value={bracketType} onChange={(e) => setBracketType(e.target.value)} style={{ padding: '8px 12px' }} title={bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
                       <option value="single_elim">Single elimination</option>
-                      <option value="double_elim">Double elimination</option>
+                      <option value="double_elim">Double elimination (8+ teams)</option>
                     </select>
                   </div>
-                  {canEdit && <button className="primary" onClick={generateBracket} disabled={tournaments.find((t) => t.id === tournamentId)?.format === '1v1' ? participants.length === 0 : (participants.length === 0 && (!teams || teams.length === 0))}>
+                  {canEdit && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
                     Generate Bracket
                   </button>}
                 </div>
               )}
             </div>
-          )}
+          );
+          })()}
         </>
       )}
     </div>

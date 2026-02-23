@@ -115,8 +115,12 @@ def preview_bracket_structure(
             r += 1
         return {"rounds": {str(k): v for k, v in rounds.items()}, "bracket_type": "single_elim"}
 
-    # Double elim preview - same rounds structure as real bracket
+    # Double elim preview - fall back to single elim for small brackets (< 8)
     size = next_power_of_2(n)
+    if size < 8:
+        return preview_bracket_structure(names, "single_elim")
+
+    # Double elim preview - same rounds structure as real bracket
     w_r1_size = size // 2
     rounds = {}
     rounds[1] = []
@@ -303,6 +307,8 @@ async def create_manual_bracket(
         seeded = entities
 
     if bracket_type == "double_elim":
+        if len(seeded) < 8:
+            raise ValueError("Double elimination requires 8+ teams or participants")
         return await _create_double_elim_matches(
             session, tournament_id, seeded, is_team
         )
@@ -586,7 +592,7 @@ async def _create_double_elim_matches(
     """Create double-elimination bracket: winners, losers, grand finals."""
     n = len(seeded)
     size = next_power_of_2(n)
-    if size < 4:
+    if size < 8:
         return await _create_single_elim_matches(
             session, tournament_id, seeded, is_team
         )
@@ -707,7 +713,7 @@ async def _create_double_elim_matches(
     # L bracket internal: L2 winners -> L3, L3 winners -> L4, etc. (up to losers final)
     l_idx = l_r2_start
     l_r_size = l_r1_size
-    while l_idx + l_r_size < len(l_matches):
+    while l_idx + l_r_size < len(l_matches) and l_r_size >= 1:
         for i in range(l_r_size):
             l_m = l_matches[l_idx + i]
             next_l = l_matches[l_idx + l_r_size + (i // 2)]
