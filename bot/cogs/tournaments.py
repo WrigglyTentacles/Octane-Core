@@ -361,7 +361,7 @@ async def set_signup_channel_cmd(interaction: discord.Interaction) -> None:
 @tournament_group.command(name="unregister", description="Unregister from a tournament")
 @app_commands.describe(tournament_id="Tournament ID to unregister from")
 async def unregister_cmd(interaction: discord.Interaction, tournament_id: int) -> None:
-    """Unregister from a tournament."""
+    """Unregister from a tournament. If on a team, moves you to unassigned; if unassigned, fully leaves."""
     if not interaction.guild_id:
         await interaction.response.send_message("Use this in a server.", ephemeral=True)
         return
@@ -382,16 +382,20 @@ async def unregister_cmd(interaction: discord.Interaction, tournament_id: int) -
             select(Registration).where(
                 Registration.tournament_id == tournament_id,
                 Registration.player_id == interaction.user.id,
-                Registration.team_id.is_(None),
             )
         )
         reg = result.scalar_one_or_none()
         if not reg:
             await interaction.followup.send("You're not registered for this tournament.", ephemeral=True)
             return
-        await session.delete(reg)
-        await session.commit()
-        await interaction.followup.send(f"Unregistered from **{t.name}**.", ephemeral=True)
+        if reg.team_id:
+            reg.team_id = None
+            await session.commit()
+            await interaction.followup.send(f"Moved to unassigned in **{t.name}**. You can be re-added to a team.", ephemeral=True)
+        else:
+            await session.delete(reg)
+            await session.commit()
+            await interaction.followup.send(f"Unregistered from **{t.name}**.", ephemeral=True)
         return
 
 

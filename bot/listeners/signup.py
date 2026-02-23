@@ -99,7 +99,7 @@ async def _handle_reaction_add(payload: discord.RawReactionActionEvent, bot: com
 
 
 async def _handle_reaction_remove(payload: discord.RawReactionActionEvent, bot: commands.Bot) -> None:
-    """Handle reaction remove - unregister user from tournament."""
+    """Handle reaction remove - unassign from team (stays in tournament) or fully leave if not on team."""
     if not payload.guild_id:
         return
 
@@ -122,20 +122,36 @@ async def _handle_reaction_remove(payload: discord.RawReactionActionEvent, bot: 
         if not t:
             return
 
-        # Remove registration
-        await session.execute(
-            delete(Registration).where(
+        reg_result = await session.execute(
+            select(Registration).where(
                 Registration.tournament_id == signup_msg.tournament_id,
                 Registration.player_id == payload.user_id,
             )
         )
+        reg = reg_result.scalar_one_or_none()
+        if not reg:
+            return
+
+        if reg.team_id:
+            # On a team: unassign to unassigned section (name stays in tournament)
+            reg.team_id = None
+            msg = "moved to unassigned"
+        else:
+            # Not on team: fully leave
+            await session.execute(
+                delete(Registration).where(
+                    Registration.tournament_id == signup_msg.tournament_id,
+                    Registration.player_id == payload.user_id,
+                )
+            )
+            msg = "dropped from"
         await session.commit()
 
         try:
             channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
             user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
             if channel and user:
-                await channel.send(f"👋 {user.mention} dropped from **{t.name}**.", delete_after=5)
+                await channel.send(f"👋 {user.mention} {msg} **{t.name}**.", delete_after=5)
         except Exception:
             pass
         return

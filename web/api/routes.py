@@ -217,7 +217,7 @@ async def reorder_participants(tournament_id: int, body: ManualEntryReorder, use
 
 @router.delete("/tournaments/{tournament_id}/registrations/{player_id}")
 async def remove_registration(tournament_id: int, player_id: int, user: User = Depends(require_moderator_user)):
-    """Remove a Discord registration (signup via reaction or /tournament register)."""
+    """Remove a Discord registration. If on a team, unassigns to participants; otherwise fully removes."""
     async with async_session_factory() as session:
         result = await session.execute(
             select(Registration).where(
@@ -228,7 +228,10 @@ async def remove_registration(tournament_id: int, player_id: int, user: User = D
         reg = result.scalar_one_or_none()
         if not reg:
             raise HTTPException(404, "Registration not found")
-        await session.delete(reg)
+        if reg.team_id:
+            reg.team_id = None
+        else:
+            await session.delete(reg)
         await session.commit()
         return {"ok": True}
 
