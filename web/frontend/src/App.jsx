@@ -424,8 +424,24 @@ function TeamSlot({ name, teamId, teams, isTeam, title }) {
   );
 }
 
-function MatchSlot({ label, name, matchId, slot, onDrop, onAdvanceOpponent, hasOpponent }) {
+function MatchSlot({ label, name, matchId, slot, onDrop, onSwapSlots, onAdvanceOpponent, hasOpponent }) {
   const [isOver, setIsOver] = useState(false);
+  const hasContent = name && name !== 'TBD' && name !== 'BYE';
+  const canDrag = hasContent && onSwapSlots;
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsOver(false);
+    const raw = e.dataTransfer.getData('application/json');
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw);
+      if (data?.type === 'bracket_slot' && onSwapSlots && !(data.matchId === matchId && data.slot === slot)) {
+        onSwapSlots(data.matchId, data.slot, matchId, slot);
+      } else if (onDrop) {
+        onDrop(matchId, slot, data);
+      }
+    } catch {}
+  };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <div
@@ -440,15 +456,17 @@ function MatchSlot({ label, name, matchId, slot, onDrop, onAdvanceOpponent, hasO
           alignItems: 'center',
           justifyContent: 'center',
           color: name && name !== label ? 'var(--text-primary)' : 'var(--text-muted)',
+          cursor: canDrag ? 'grab' : 'default',
         }}
-        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setIsOver(true); }}
-        onDragLeave={() => setIsOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setIsOver(false);
-          const data = e.dataTransfer.getData('application/json');
-          if (data && onDrop) onDrop(matchId, slot, JSON.parse(data));
+        draggable={canDrag}
+        onDragStart={(e) => {
+          if (!canDrag) return;
+          e.dataTransfer.setData('application/json', JSON.stringify({ type: 'bracket_slot', matchId, slot }));
+          e.dataTransfer.effectAllowed = 'move';
         }}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (onSwapSlots) setIsOver(true); }}
+        onDragLeave={(e) => { if (e.currentTarget.contains(e.relatedTarget)) return; setIsOver(false); }}
+        onDrop={handleDrop}
       >
         {name || label}
       </div>
@@ -768,12 +786,27 @@ function SubstituteForm({ teams, standby, onSubstitute }) {
   );
 }
 
-function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPreview, onDrop, matchId, slot, onAdvanceOpponent, onSetWinner, hasOpponent, canSetWinner, canEdit }) {
+function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPreview, onDrop, onSwapSlots, matchId, slot, onAdvanceOpponent, onSetWinner, hasOpponent, canSetWinner, canEdit }) {
   const content = isTeam && teams?.length ? (
     <TeamSlot name={name} teamId={teamId} teams={teams} isTeam={true} />
   ) : (
     <span>{name || 'TBD'}</span>
   );
+  const hasContent = name && name !== 'TBD' && name !== 'BYE';
+  const canDrag = hasContent && onSwapSlots;
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const raw = e.dataTransfer.getData('application/json');
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw);
+      if (data?.type === 'bracket_slot' && onSwapSlots && !(data.matchId === matchId && data.slot === slot)) {
+        onSwapSlots(data.matchId, data.slot, matchId, slot);
+      } else if (onDrop) {
+        onDrop(matchId, slot, data);
+      }
+    } catch {}
+  };
   const boxStyle = {
     display: 'flex',
     alignItems: 'center',
@@ -806,18 +839,43 @@ function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPrevi
     if (canClickWinner) onSetWinner(matchId, slot);
     else if (isDropout) onAdvanceOpponent(matchId, slot === 1 ? 2 : 1);
   };
+  const [isOver, setIsOver] = useState(false);
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setIsOver(true);
+  };
+  const handleDragLeave = (e) => {
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setIsOver(false);
+  };
   return (
     <div
-      style={{ ...boxStyle, cursor: (canClickWinner || showWinnerBtn) ? 'pointer' : 'default' }}
-      onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
-      onDrop={(e) => {
-        e.preventDefault();
-        const data = e.dataTransfer.getData('application/json');
-        if (data && onDrop) onDrop(matchId, slot, JSON.parse(data));
+      style={{
+        ...boxStyle,
+        cursor: (canClickWinner || showWinnerBtn) ? 'pointer' : 'default',
+        ...(isOver && { background: 'var(--accent-muted)', borderColor: 'var(--accent)' }),
       }}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={(e) => { handleDrop(e); setIsOver(false); }}
       onClick={canClickWinner ? () => onSetWinner(matchId, slot) : undefined}
-      title={canClickWinner ? 'Click to set as winner' : (isDropout ? 'Opponent dropped — click to advance winner' : (typeof name === 'string' ? name : undefined))}
+      title={canClickWinner ? 'Click to set as winner' : (isDropout ? 'Opponent dropped — click to advance winner' : (canDrag ? 'Drag handle to swap with another slot' : (typeof name === 'string' ? name : undefined)))}
     >
+      {canDrag && (
+        <div
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData('application/json', JSON.stringify({ type: 'bracket_slot', matchId, slot }));
+            e.dataTransfer.effectAllowed = 'move';
+          }}
+          style={{ cursor: 'grab', padding: '4px 6px', marginRight: 4, color: 'var(--text-muted)', fontSize: 12, flexShrink: 0 }}
+          title="Drag to swap with another slot"
+          onClick={(e) => e.stopPropagation()}
+        >
+          ⋮⋮
+        </div>
+      )}
       <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{content}</div>
       {showWinnerBtn && (
         <button onClick={(ev) => { ev.stopPropagation(); handleWinnerClick(); }} style={{ marginLeft: 8, fontSize: 10, padding: '2px 6px', flexShrink: 0 }} title={canClickWinner ? 'Set as winner' : 'Advance winner'}>✓</button>
@@ -826,7 +884,7 @@ function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPrevi
   );
 }
 
-function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onAdvanceOpponent, onSetWinner }) {
+function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner }) {
   const roundEntries = Object.entries(rounds || {}).filter(([k]) => Number(k) < 10).sort((a, b) => Number(a[0]) - Number(b[0]));
   if (roundEntries.length === 0) return <p style={{ color: 'var(--text-muted)', padding: 24 }}>No matches to display.</p>;
 
@@ -844,12 +902,22 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onAdva
     const canSetWinner = bothFilled && !m.winner_name;
     return (
       <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 0, minWidth: colW }}>
-        <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teams} teamId={m.team1_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} matchId={m.id} slot={1} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} />
+        <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teams} teamId={m.team1_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={1} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} />
         <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
-        <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teams} teamId={m.team2_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} matchId={m.id} slot={2} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} />
+        <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teams} teamId={m.team2_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={2} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} />
         {m.winner_name && (
-          <div style={{ marginTop: 6, fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>
-            → {m.winner_name}
+          <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>→ {m.winner_name}</span>
+            {onSwapWinner && bothFilled && (
+              <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px' }} title="Swap winner (wrong result reported)">
+                Swap
+              </button>
+            )}
+            {onClearWinner && bothFilled && (
+              <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px', color: 'var(--text-muted)' }} title="Undo winner (clear and fix manually)">
+                Undo
+              </button>
+            )}
           </div>
         )}
         {canSetWinner && onSetWinner && (
@@ -875,7 +943,7 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onAdva
   );
 }
 
-function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onAdvanceOpponent }) {
+function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSwapWinner, onClearWinner }) {
   const roundEntries = Object.entries(rounds || {}).filter(([k]) => Number(k) < 10).sort((a, b) => Number(a[0]) - Number(b[0]));
   if (roundEntries.length === 0) return <p style={{ color: 'var(--text-muted)', padding: 24 }}>No matches to display.</p>;
 
@@ -931,9 +999,9 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onAdvanc
         >
           {isEditable ? (
             <>
-              <MatchSlot label="Slot 1" name={s1} matchId={m.id} slot={1} onDrop={onUpdateMatch} onAdvanceOpponent={onAdvanceOpponent} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} teamId={m.team1_id} teams={teams} isTeam={isTeam} />
+              <MatchSlot label="Slot 1" name={s1} matchId={m.id} slot={1} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} teamId={m.team1_id} teams={teams} isTeam={isTeam} />
               <span style={{ display: 'block', textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, margin: '4px 0' }}>vs</span>
-              <MatchSlot label="Slot 2" name={s2} matchId={m.id} slot={2} onDrop={onUpdateMatch} onAdvanceOpponent={onAdvanceOpponent} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} teamId={m.team2_id} teams={teams} isTeam={isTeam} />
+              <MatchSlot label="Slot 2" name={s2} matchId={m.id} slot={2} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} teamId={m.team2_id} teams={teams} isTeam={isTeam} />
             </>
           ) : (
             <>
@@ -943,8 +1011,18 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onAdvanc
             </>
           )}
           {m.winner_name && (
-            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>
-              → {m.winner_name}
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>→ {m.winner_name}</span>
+              {onSwapWinner && (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id) && (
+                <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px' }} title="Swap winner (wrong result reported)">
+                  Swap
+                </button>
+              )}
+              {onClearWinner && (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id) && (
+                <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 10, padding: '2px 6px', color: 'var(--text-muted)' }} title="Undo winner (clear and fix manually)">
+                  Undo
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1001,12 +1079,9 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onAdvanc
   );
 }
 
-function BracketView({ bracket, tournament, teams, participants, standby, onUpdateMatch, onAdvanceOpponent, onSetWinner, isPreview, canEdit }) {
+function BracketView({ bracket, tournament, teams, participants, standby, onUpdateMatch, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, onSwapSlots, isPreview, canEdit }) {
   const isTeam = tournament?.format !== '1v1';
   const teamsToUse = (bracket?.teams && bracket.teams.length > 0) ? bracket.teams : (teams || []);
-  const pool = isTeam
-    ? (teams || []).map((t) => ({ id: t.id, name: t.name, type: 'team' }))
-    : [...(participants || []), ...(standby || [])].map((p) => ({ ...p, type: 'manual_entry' }));
 
   const allMatches = bracket?.rounds ? Object.values(bracket.rounds).flat() : [];
   const isDoubleElim = bracket?.bracket_type === 'double_elim';
@@ -1046,14 +1121,24 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
                   </>
                 ) : (
                   <>
-                <MatchSlot label="Slot 1" name={s1} matchId={m.id} slot={1} onDrop={canEdit ? onUpdateMatch : null} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} teamId={m.team1_id} teams={teamsToUse} isTeam={isTeam} />
+                <MatchSlot label="Slot 1" name={s1} matchId={m.id} slot={1} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} teamId={m.team1_id} teams={teamsToUse} isTeam={isTeam} />
                 <span style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>vs</span>
-                <MatchSlot label="Slot 2" name={s2} matchId={m.id} slot={2} onDrop={canEdit ? onUpdateMatch : null} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} teamId={m.team2_id} teams={teamsToUse} isTeam={isTeam} />
+                <MatchSlot label="Slot 2" name={s2} matchId={m.id} slot={2} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} teamId={m.team2_id} teams={teamsToUse} isTeam={isTeam} />
                   </>
                 )}
                 {m.winner_name && (
-                  <div style={{ marginTop: 8, color: 'var(--success)', fontWeight: 600, fontSize: 14 }}>
-                    Winner: {m.winner_name}
+                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: 14 }}>Winner: {m.winner_name}</span>
+                    {canEdit && onSwapWinner && hasOpponent && (
+                      <button onClick={() => onSwapWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px' }} title="Swap winner (wrong result reported)">
+                        Swap
+                      </button>
+                    )}
+                    {canEdit && onClearWinner && hasOpponent && (
+                      <button onClick={() => onClearWinner(m.id)} style={{ fontSize: 11, padding: '4px 8px', color: 'var(--text-muted)' }} title="Undo winner (clear and fix manually)">
+                        Undo
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1075,8 +1160,11 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
         teams={teamsToUse}
         isPreview={isPreview}
         onUpdateMatch={canEdit ? onUpdateMatch : null}
+        onSwapSlots={canEdit ? onSwapSlots : null}
         onAdvanceOpponent={canEdit ? onAdvanceOpponent : null}
         onSetWinner={canEdit ? onSetWinner : null}
+        onSwapWinner={canEdit ? onSwapWinner : null}
+        onClearWinner={canEdit ? onClearWinner : null}
       />
     );
   };
@@ -1091,7 +1179,7 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
         <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
           <div>
             <h3 style={{ margin: '0 0 16px', color: 'var(--accent)', fontSize: 16 }}>Winners Bracket</h3>
-            <BracketTree rounds={Object.fromEntries(Object.entries(wByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} onUpdateMatch={onUpdateMatch} onAdvanceOpponent={onAdvanceOpponent} />
+            <BracketTree rounds={Object.fromEntries(Object.entries(wByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 24 }}>
             <h3 style={{ margin: '0 0 16px', color: 'var(--accent)', fontSize: 16 }}>Losers Bracket</h3>
@@ -1111,18 +1199,8 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
   };
 
   return (
-    <div style={{ marginTop: 24, display: 'flex', gap: 32 }}>
-      {!isPreview && canEdit && pool.length > 0 && (
-        <div style={{ minWidth: 200 }}>
-          <h4 style={{ margin: '0 0 12px', color: 'var(--text-secondary)', fontSize: 14, fontWeight: 600 }}>Drag to assign</h4>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {pool.map((p) => (
-              <DraggableEntity key={p.id} entity={p} />
-            ))}
-          </div>
-        </div>
-      )}
-      <div style={{ flex: 1, minWidth: 0 }}>
+    <div style={{ marginTop: 24 }}>
+      <div style={{ minWidth: 0 }}>
         <h2 style={{ margin: '0 0 20px', fontSize: 22, color: 'var(--text-primary)' }}>
           {bracket?.tournament?.name} — {isPreview ? 'Preview' : 'Bracket'} {isDoubleElim && '(Double Elim)'}
         </h2>
@@ -1141,16 +1219,6 @@ function App() {
   const { canEdit, authFetch, user, logout, isAdmin, loading: authLoading } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-
-  useEffect(() => {
-    if (!authLoading && !user) {
-      navigate('/login', { replace: true, state: { from: location } });
-    }
-  }, [authLoading, user, navigate, location]);
-
-  if (!authLoading && !user) {
-    return null;
-  }
   const [siteTitle, setSiteTitle] = useState('Octane Bracket Manager');
   const [tournaments, setTournaments] = useState([]);
   const [tournamentId, setTournamentIdState] = useState(() => {
@@ -1235,7 +1303,13 @@ function App() {
   };
 
   useEffect(() => {
-    fetch(`${API}/settings`).then((r) => r.json()).then((s) => {
+    fetch(`${API}/settings`).then((r) => r.text()).then((text) => {
+      let s = {};
+      try {
+        s = text ? JSON.parse(text) : {};
+      } catch {
+        return;
+      }
       setSiteTitle(s.site_title || 'Octane Bracket Manager');
       if (s.accent_color) document.documentElement.style.setProperty('--accent', s.accent_color);
       if (s.accent_hover) document.documentElement.style.setProperty('--accent-hover', s.accent_hover);
@@ -1243,6 +1317,12 @@ function App() {
       if (s.bg_secondary) document.documentElement.style.setProperty('--bg-secondary', s.bg_secondary);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      navigate('/login', { replace: true, state: { from: location } });
+    }
+  }, [authLoading, user, navigate, location]);
 
   useEffect(() => {
     fetchTournaments();
@@ -1453,6 +1533,54 @@ function App() {
     }
   };
 
+  const clearWinner = async (matchId) => {
+    try {
+      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/${matchId}/clear-winner`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const data = await parseJson(res);
+        throw new Error(data?.detail || 'Failed to clear winner');
+      }
+      await fetchData({ silent: true });
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const swapSlots = async (fromMatchId, fromSlot, toMatchId, toSlot) => {
+    if (fromMatchId === toMatchId && fromSlot === toSlot) return;
+    try {
+      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/swap-slots`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_match_id: fromMatchId, from_slot: fromSlot, to_match_id: toMatchId, to_slot: toSlot }),
+      });
+      if (!res.ok) {
+        const data = await parseJson(res);
+        throw new Error(data?.detail || 'Failed to swap');
+      }
+      await fetchData({ silent: true });
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const swapWinner = async (matchId) => {
+    try {
+      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/${matchId}/swap-winner`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const data = await parseJson(res);
+        throw new Error(data?.detail || 'Failed to swap winner');
+      }
+      await fetchData({ silent: true });
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const setWinner = async (matchId, slot) => {
     const m = bracket?.rounds && Object.values(bracket.rounds).flat().find((x) => x.id === matchId);
     if (!m) return;
@@ -1607,8 +1735,8 @@ function App() {
     }
   };
 
-  const regenerateBracket = async () => {
-    if (!window.confirm('Regenerate bracket? This will replace the current bracket with a fresh one from current participants/teams.')) return;
+  const resetBracket = async () => {
+    if (!window.confirm('Reset bracket? This will delete the current bracket and create a fresh one from current participants/teams.')) return;
     setLoading(true);
     setError(null);
     try {
@@ -1679,6 +1807,10 @@ function App() {
       setLoading(false);
     }
   };
+
+  if (!authLoading && !user) {
+    return null;
+  }
 
   return (
     <div style={{ padding: 32, maxWidth: 1280, margin: '0 auto', minHeight: '100vh' }}>
@@ -1886,12 +2018,12 @@ function App() {
                 <div>
                   {canEdit && (
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
-                      <button onClick={regenerateBracket} disabled={loading || generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : 'Replace bracket with a fresh one from current participants/teams'}>
-                        Regenerate Bracket
+                      <button onClick={resetBracket} disabled={loading || generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : 'Delete bracket and create a fresh one from current participants/teams'}>
+                        Reset
                       </button>
                     </div>
                   )}
-                  <BracketView bracket={bracket} tournament={bracket.tournament} teams={teams} participants={participants} standby={standby} onUpdateMatch={updateMatch} onAdvanceOpponent={advanceOpponent} onSetWinner={setWinner} canEdit={canEdit} />
+                  <BracketView bracket={bracket} tournament={bracket.tournament} teams={teams} participants={participants} standby={standby} onUpdateMatch={updateMatch} onAdvanceOpponent={advanceOpponent} onSetWinner={setWinner} onSwapWinner={swapWinner} onClearWinner={clearWinner} onSwapSlots={swapSlots} canEdit={canEdit} />
                 </div>
               ) : previewBracket && Object.keys(previewBracket.rounds || {}).length > 0 ? (
                 <div>
@@ -1902,7 +2034,7 @@ function App() {
                       <option value="single_elim">Single elimination</option>
                       <option value="double_elim">Double elimination</option>
                     </select>
-                    {canEdit && <button className="primary" onClick={generateBracket}>Generate Bracket</button>}
+                    {canEdit && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>Generate Bracket</button>}
                   </div>
                   <BracketView bracket={previewBracket} tournament={previewBracket.tournament} teams={teams} participants={participants} standby={standby} isPreview canEdit={false} />
                 </div>

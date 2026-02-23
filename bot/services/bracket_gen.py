@@ -493,6 +493,185 @@ async def advance_round_when_complete(
             await advance_round_when_complete(session, bracket_id, round_num + 1, is_team)
 
 
+def _get_entity_from_slot(m: BracketMatch, slot: int, is_team: bool) -> Optional[Tuple]:
+    """Get (entity, is_team) tuple for the entity in slot 1 or 2."""
+    if slot == 1:
+        if m.team1_id:
+            return (m.team1_id, True)
+        if m.manual_entry1_id:
+            return (("manual", m.manual_entry1_id), False, True)
+        if m.player1_id:
+            return (m.player1_id, False, False)
+    else:
+        if m.team2_id:
+            return (m.team2_id, True)
+        if m.manual_entry2_id:
+            return (("manual", m.manual_entry2_id), False, True)
+        if m.player2_id:
+            return (m.player2_id, False, False)
+    return None
+
+
+async def _clear_winner_and_ancestors(
+    session: AsyncSession, match: BracketMatch, is_team: bool
+) -> None:
+    """Clear winner for match and recursively for all ancestor matches."""
+    match.winner_team_id = None
+    match.winner_player_id = None
+    match.winner_manual_entry_id = None
+    if match.parent_match_id:
+        parent = await session.get(BracketMatch, match.parent_match_id)
+        if parent:
+            await _clear_winner_and_ancestors(session, parent, is_team)
+
+
+def _clear_slot(m: BracketMatch, slot: int, is_team: bool) -> None:
+    """Clear entity from match slot."""
+    if is_team:
+        if slot == 1:
+            m.team1_id = None
+        else:
+            m.team2_id = None
+    else:
+        if slot == 1:
+            m.manual_entry1_id = None
+            m.player1_id = None
+        else:
+            m.manual_entry2_id = None
+            m.player2_id = None
+
+
+async def clear_match_winner(
+    session: AsyncSession, match_id: int, tournament_id: int
+) -> None:
+    """Clear the winner of a match and remove from parent/loser slots. Cascades to clear downstream."""
+    match = await session.get(BracketMatch, match_id)
+    if not match:
+        raise ValueError("Match not found")
+    bracket = await session.get(Bracket, match.bracket_id)
+    if not bracket or bracket.tournament_id != tournament_id:
+        raise ValueError("Match not found")
+    t = await session.get(Tournament, bracket.tournament_id)
+    is_team = t and t.format != "1v1"
+
+    if not (match.winner_team_id or match.winner_player_id or match.winner_manual_entry_id):
+        return
+
+    match.winner_team_id = None
+    match.winner_player_id = None
+    match.winner_manual_entry_id = None
+
+    if match.parent_match_id:
+        parent = await session.get(BracketMatch, match.parent_match_id)
+        if parent:
+            _clear_slot(parent, match.parent_match_slot, is_team)
+            await _clear_winner_and_ancestors(session, parent, is_team)
+
+    if match.loser_advances_to_match_id:
+        loser_match = await session.get(BracketMatch, match.loser_advances_to_match_id)
+        if loser_match:
+            _clear_slot(loser_match, match.loser_advances_to_slot, is_team)
+            await _clear_winner_and_ancestors(session, loser_match, is_team)
+
+
+async def swap_slots(
+    session: AsyncSession,
+    tournament_id: int,
+    from_match_id: int,
+    from_slot: int,
+    to_match_id: int,
+    to_slot: int,
+) -> None:
+    """Swap or move entities between two bracket slots. Clears winners for affected matches."""
+    if from_match_id == to_match_id and from_slot == to_slot:
+        return
+    from_match = await session.get(BracketMatch, from_match_id)
+    to_match = await session.get(BracketMatch, to_match_id)
+    if not from_match or not to_match:
+        raise ValueError("Match not found")
+    b = await session.get(Bracket, from_match.bracket_id)
+    if not b or b.tournament_id != tournament_id:
+        raise ValueError("Match not found")
+    to_b = await session.get(Bracket, to_match.bracket_id)
+    if not to_b or to_b.tournament_id != tournament_id:
+        raise ValueError("Match not found")
+    t = await session.get(Tournament, b.tournament_id)
+    is_team = t and t.format != "1v1"
+
+    from_entity = _get_entity_from_slot(from_match, from_slot, is_team)
+    to_entity = _get_entity_from_slot(to_match, to_slot, is_team)
+
+    if not from_entity:
+        raise ValueError("Source slot is empty")
+
+    _assign_entity_to_match(to_match, to_slot, from_entity, is_team)
+    _assign_entity_to_match(from_match, from_slot, to_entity, is_team)
+
+    await _clear_winner_and_ancestors(session, from_match, is_team)
+    if from_match_id != to_match_id:
+        await _clear_winner_and_ancestors(session, to_match, is_team)
+
+
+async def swap_match_winner(
+    session: AsyncSession, match_id: int, tournament_id: int
+) -> None:
+    """Swap the winner of a match to the other team. Updates parent slot and clears downstream winners."""
+    match = await session.get(BracketMatch, match_id)
+    if not match:
+        raise ValueError("Match not found")
+    bracket = await session.get(Bracket, match.bracket_id)
+    if not bracket or bracket.tournament_id != tournament_id:
+        raise ValueError("Match not found")
+    t = await session.get(Tournament, bracket.tournament_id)
+    is_team = t and t.format != "1v1"
+
+    winner_entity = _get_winner_entity(match, is_team)
+    if not winner_entity:
+        raise ValueError("Match has no winner to swap")
+    if is_team:
+        winner_slot = 1 if match.winner_team_id == match.team1_id else 2
+    else:
+        if match.winner_manual_entry_id:
+            winner_slot = 1 if match.winner_manual_entry_id == match.manual_entry1_id else 2
+        else:
+            winner_slot = 1 if match.winner_player_id == match.player1_id else 2
+    loser_slot = 3 - winner_slot
+    loser_entity = _get_entity_from_slot(match, loser_slot, is_team)
+    if not loser_entity:
+        raise ValueError("Other slot is empty; cannot swap")
+
+    new_winner = loser_entity
+    if is_team:
+        match.winner_team_id = new_winner[0]
+        match.winner_player_id = None
+        match.winner_manual_entry_id = None
+    else:
+        match.winner_team_id = None
+        if len(new_winner) == 3 and new_winner[2]:
+            match.winner_manual_entry_id = new_winner[0][1]
+            match.winner_player_id = None
+        else:
+            match.winner_player_id = new_winner[0]
+            match.winner_manual_entry_id = None
+
+    if match.parent_match_id:
+        parent = await session.get(BracketMatch, match.parent_match_id)
+        if parent:
+            _assign_entity_to_match(parent, match.parent_match_slot, new_winner, is_team)
+            await _clear_winner_and_ancestors(session, parent, is_team)
+
+    if match.loser_advances_to_match_id:
+        loser_match = await session.get(BracketMatch, match.loser_advances_to_match_id)
+        if loser_match:
+            old_loser = winner_entity
+            if is_team:
+                old_loser_entity = (old_loser[0], True)
+            else:
+                old_loser_entity = old_loser
+            _assign_entity_to_match(loser_match, match.loser_advances_to_slot, old_loser_entity, is_team)
+            await _clear_winner_and_ancestors(session, loser_match, is_team)
+
+
 def _assign_entity_to_match(
     m: BracketMatch, slot: int, entity: Optional[Tuple], is_team: bool
 ) -> None:

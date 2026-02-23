@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from bot.models import User
 from web.auth import require_moderator_user
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -650,6 +650,68 @@ async def regenerate_bracket(tournament_id: int, body: Optional[GenerateBracketR
 
 
 # --- Bracket match updates (for drag-drop) ---
+
+
+class SwapSlotsRequest(BaseModel):
+    from_match_id: int
+    from_slot: int
+    to_match_id: int
+    to_slot: int
+
+
+@router.post("/tournaments/{tournament_id}/bracket/matches/swap-slots")
+async def swap_slots_route(
+    tournament_id: int, body: SwapSlotsRequest, user: User = Depends(require_moderator_user)
+):
+    """Swap or move entities between two bracket slots. Clears winners for affected matches."""
+    from bot.services.bracket_gen import swap_slots
+
+    async with async_session_factory() as session:
+        try:
+            await swap_slots(
+                session,
+                tournament_id,
+                body.from_match_id,
+                body.from_slot,
+                body.to_match_id,
+                body.to_slot,
+            )
+            await session.commit()
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+
+@router.post("/tournaments/{tournament_id}/bracket/matches/{match_id}/clear-winner")
+async def clear_match_winner_route(
+    tournament_id: int, match_id: int, user: User = Depends(require_moderator_user)
+):
+    """Clear the winner of a match. Use when a result was set incorrectly and you need to undo."""
+    from bot.services.bracket_gen import clear_match_winner
+
+    async with async_session_factory() as session:
+        try:
+            await clear_match_winner(session, match_id, tournament_id)
+            await session.commit()
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+
+@router.post("/tournaments/{tournament_id}/bracket/matches/{match_id}/swap-winner")
+async def swap_match_winner_route(
+    tournament_id: int, match_id: int, user: User = Depends(require_moderator_user)
+):
+    """Swap the winner of a match to the other team. Use when a result was reported incorrectly."""
+    from bot.services.bracket_gen import swap_match_winner
+
+    async with async_session_factory() as session:
+        try:
+            await swap_match_winner(session, match_id, tournament_id)
+            await session.commit()
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
 
 
 @router.patch("/tournaments/{tournament_id}/bracket/matches/{match_id}")

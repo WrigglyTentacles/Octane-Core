@@ -24,7 +24,13 @@ export function AuthProvider({ children }) {
       const res = await fetch(`${API}/auth/me/optional`, {
         headers: { Authorization: `Bearer ${t}` },
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null;
+      }
       if (data) {
         setUser(data);
       } else {
