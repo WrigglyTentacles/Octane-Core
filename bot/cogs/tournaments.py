@@ -158,6 +158,82 @@ async def register_cmd(interaction: discord.Interaction, tournament_id: int) -> 
         return
 
 
+@tournament_group.command(name="post", description="Post a signup message — users react to sign up (Moderator+)")
+@app_commands.describe(
+    tournament_id="Tournament ID to post signup for",
+    channel="Channel to post in (default: current channel)",
+)
+@mod_or_higher()
+async def post(
+    interaction: discord.Interaction,
+    tournament_id: int,
+    channel: Optional[discord.TextChannel] = None,
+) -> None:
+    """Post a signup embed. Users react with 📝 to sign up, or use /tournament register."""
+    if not interaction.guild_id:
+        await interaction.response.send_message("Use this in a server.", ephemeral=True)
+        return
+    target_channel = channel or interaction.channel
+    if not isinstance(target_channel, discord.TextChannel):
+        await interaction.response.send_message("Cannot post in this channel type.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    async for session in get_async_session():
+        await init_db()
+        t = await get_tournament(session, tournament_id, interaction.guild_id)
+        if not t:
+            await interaction.followup.send("Tournament not found.", ephemeral=True)
+            return
+        if t.status != "open":
+            await interaction.followup.send(
+                f"Tournament is {t.status}. Set status to 'open' before posting signup.",
+                ephemeral=True,
+            )
+            return
+
+        # Count current registrations
+        reg_count = await session.execute(
+            select(Registration).where(Registration.tournament_id == tournament_id)
+        )
+        count = len(reg_count.scalars().all())
+
+        embed = discord.Embed(
+            title=f"📋 {t.name}",
+            description=(
+                f"**Format:** {t.format}\n"
+                f"**MMR Playlist:** {t.mmr_playlist}\n\n"
+                f"React with {SIGNUP_EMOJI} to sign up!\n"
+                f"Remove your reaction to drop out.\n\n"
+                f"*Or use `/tournament register` with ID **{t.id}***"
+            ),
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text=f"Tournament ID: {t.id} • {count} signed up")
+        embed.timestamp = discord.utils.utcnow()
+
+        msg = await target_channel.send(embed=embed)
+        await msg.add_reaction(SIGNUP_EMOJI)
+
+        session.add(
+            TournamentSignupMessage(
+                message_id=msg.id,
+                channel_id=msg.channel.id,
+                guild_id=interaction.guild_id,
+                tournament_id=tournament_id,
+                signup_emoji=SIGNUP_EMOJI,
+            )
+        )
+        await session.commit()
+
+        await interaction.followup.send(
+            f"Posted signup for **{t.name}** in {target_channel.mention}. Users can react with {SIGNUP_EMOJI} to sign up.",
+            ephemeral=True,
+        )
+        return
+
+
 @tournament_group.command(name="edit", description="Edit a tournament (Moderator+)")
 @app_commands.describe(
     tournament_id="Tournament ID",

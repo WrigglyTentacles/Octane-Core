@@ -273,8 +273,9 @@ function ParticipantsAndStandbyView({
     const activeId = String(active.id);
     const overId = String(over.id);
     if (overId === 'zone-standby' && activeId.startsWith('p-')) {
-      const entryId = Number(activeId.replace('p-', ''));
-      onMoveEntry?.(entryId, 'standby');
+      const rawId = activeId.replace('p-', '');
+      const entryId = Number(rawId);
+      if (Number.isFinite(entryId) && !rawId.startsWith('discord:')) onMoveEntry?.(entryId, 'standby');
     } else if (overId === 'zone-participants' && activeId.startsWith('s-')) {
       const entryId = Number(activeId.replace('s-', ''));
       const item = standby.find((s) => s.id === entryId);
@@ -317,21 +318,24 @@ function ParticipantsAndStandbyView({
             )}
             <DroppableZone id="zone-participants" minHeight={80}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {participants.map((item) => (
-                  <RosterItem
-                    key={item.id}
-                    item={item}
-                    prefix="p"
-                    label={item.display_name}
-                    onRename={onRenameParticipant}
-                    onRemove={onRemoveParticipant}
-                    onMoveUp={(id) => moveUp(participants, id, onReorderParticipants)}
-                    onMoveDown={(id) => moveDown(participants, id, onReorderParticipants)}
-                    canRemove={true}
-                    canRename={true}
-                    readOnly={readOnly}
-                  />
-                ))}
+                {participants.map((item) => {
+                  const isDiscord = item.source === 'discord';
+                  return (
+                    <RosterItem
+                      key={item.id}
+                      item={item}
+                      prefix="p"
+                      label={item.display_name + (isDiscord ? ' (Discord)' : '')}
+                      onRename={isDiscord ? undefined : onRenameParticipant}
+                      onRemove={onRemoveParticipant}
+                      onMoveUp={isDiscord ? undefined : (id) => moveUp(participants, id, onReorderParticipants)}
+                      onMoveDown={isDiscord ? undefined : (id) => moveDown(participants, id, onReorderParticipants)}
+                      canRemove={true}
+                      canRename={!isDiscord}
+                      readOnly={readOnly}
+                    />
+                  );
+                })}
               </div>
             </DroppableZone>
           </div>
@@ -1480,7 +1484,12 @@ function App() {
 
   const removeParticipant = async (id) => {
     try {
-      await authFetch(`${API}/tournaments/${tournamentId}/participants/${id}`, { method: 'DELETE' });
+      if (typeof id === 'string' && id.startsWith('discord:')) {
+        const playerId = id.replace('discord:', '');
+        await authFetch(`${API}/tournaments/${tournamentId}/registrations/${playerId}`, { method: 'DELETE' });
+      } else {
+        await authFetch(`${API}/tournaments/${tournamentId}/participants/${id}`, { method: 'DELETE' });
+      }
       await fetchData({ silent: true });
     } catch (err) {
       setError(err.message);
@@ -1489,10 +1498,11 @@ function App() {
 
   const reorderParticipants = async (entryIds) => {
     try {
+      const manualIds = entryIds.filter((id) => typeof id === 'number');
       await authFetch(`${API}/tournaments/${tournamentId}/participants/reorder`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entry_ids: entryIds }),
+        body: JSON.stringify({ entry_ids: manualIds }),
       });
       await fetchData({ silent: true });
     } catch (err) {

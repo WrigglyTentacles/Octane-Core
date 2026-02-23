@@ -9,6 +9,7 @@ from discord.ext import commands
 import config
 from bot.checks import admin_only, mod_or_higher
 from bot.cogs import registration, mmr, tournaments, teams, brackets, config_cog
+from bot.listeners import signup
 from bot.models import init_db
 from bot.services.rl_api import RLAPIService
 
@@ -48,6 +49,9 @@ class OctaneBot(commands.Bot):
         # Sync commands
         await self.tree.sync()
         logger.info("Commands synced")
+
+        # Reaction-based signup
+        signup.setup(self)
 
     async def close(self) -> None:
         """Cleanup on shutdown."""

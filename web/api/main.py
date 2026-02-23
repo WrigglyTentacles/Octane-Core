@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from bot.models import Bracket, BracketMatch, Player, Team, TeamManualMember, Tournament, TournamentManualEntry
+from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamManualMember, Tournament, TournamentManualEntry
 from bot.models.base import async_session_factory, init_db
 
 from web.api.routes import router as api_router
@@ -176,6 +176,17 @@ async def get_bracket_preview(tournament_id: int, bracket_type: str = "single_el
             )
             entries = result.scalars().all()
             names = [e.display_name for e in entries]
+            # Add Discord registrations for 1v1
+            regs_result = await session.execute(
+                select(Registration)
+                .where(
+                    Registration.tournament_id == tournament_id,
+                    Registration.team_id.is_(None),
+                )
+                .options(selectinload(Registration.player))
+            )
+            for reg in regs_result.scalars().all():
+                names.append(reg.player.display_name or str(reg.player_id))
         if len(names) < 2:
             return {"error": "Add at least 2 participants or teams", "rounds": {}}
         preview = preview_bracket_structure(names, bracket_type)

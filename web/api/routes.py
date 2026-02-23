@@ -45,6 +45,16 @@ class ManualEntryResponse(BaseModel):
     list_type: str
     original_list_type: Optional[str] = None  # never changes; for standby recognition
     sort_order: int
+    source: str = "manual"
+
+
+class DiscordRegistrationResponse(BaseModel):
+    """Discord signup (reaction or /tournament register). Shown in participants with source=discord."""
+
+    id: str  # "discord:{player_id}"
+    display_name: str
+    player_id: int  # Discord user ID
+    source: str = "discord"
 
 
 class ManualEntryReorder(BaseModel):
@@ -94,11 +104,12 @@ class TeamsBulkUpdate(BaseModel):
 
 @router.get("/tournaments/{tournament_id}/participants")
 async def list_participants(tournament_id: int):
-    """List manual participants for a tournament."""
+    """List participants: manual entries first, then Discord signups (reaction or /tournament register)."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
         if not t:
             raise HTTPException(404, "Tournament not found")
+        # Manual participants
         result = await session.execute(
             select(TournamentManualEntry)
             .where(
@@ -107,8 +118,28 @@ async def list_participants(tournament_id: int):
             )
             .order_by(TournamentManualEntry.sort_order, TournamentManualEntry.id)
         )
-        entries = result.scalars().all()
-        return [ManualEntryResponse.model_validate(e) for e in entries]
+        manual = [ManualEntryResponse.model_validate(e) for e in result.scalars().all()]
+        # Discord registrations (1v1 only; team format uses teams)
+        discord_list = []
+        if t.format == "1v1":
+            regs_result = await session.execute(
+                select(Registration)
+                .where(
+                    Registration.tournament_id == tournament_id,
+                    Registration.team_id.is_(None),
+                )
+                .options(selectinload(Registration.player))
+            )
+            for reg in regs_result.scalars().all():
+                discord_list.append(
+                    DiscordRegistrationResponse(
+                        id=f"discord:{reg.player_id}",
+                        display_name=reg.player.display_name or str(reg.player_id),
+                        player_id=reg.player_id,
+                    )
+                )
+        # Manual first, then Discord
+        return manual + discord_list
 
 
 @router.post("/tournaments/{tournament_id}/participants")
@@ -167,12 +198,32 @@ async def remove_participant(tournament_id: int, entry_id: int, user: User = Dep
 
 @router.patch("/tournaments/{tournament_id}/participants/reorder")
 async def reorder_participants(tournament_id: int, body: ManualEntryReorder, user: User = Depends(require_moderator_user)):
-    """Reorder participants by ID list."""
+    """Reorder participants by ID list (manual entries only)."""
     async with async_session_factory() as session:
         for i, eid in enumerate(body.entry_ids):
+            if not isinstance(eid, int):
+                continue
             entry = await session.get(TournamentManualEntry, eid)
             if entry and entry.tournament_id == tournament_id and entry.list_type == "participant":
                 entry.sort_order = i
+        await session.commit()
+        return {"ok": True}
+
+
+@router.delete("/tournaments/{tournament_id}/registrations/{player_id}")
+async def remove_registration(tournament_id: int, player_id: int, user: User = Depends(require_moderator_user)):
+    """Remove a Discord registration (signup via reaction or /tournament register)."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Registration).where(
+                Registration.tournament_id == tournament_id,
+                Registration.player_id == player_id,
+            )
+        )
+        reg = result.scalar_one_or_none()
+        if not reg:
+            raise HTTPException(404, "Registration not found")
+        await session.delete(reg)
         await session.commit()
         return {"ok": True}
 
