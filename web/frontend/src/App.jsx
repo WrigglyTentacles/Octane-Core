@@ -1396,10 +1396,11 @@ function App() {
   const [copyFeedback, setCopyFeedback] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuSection, setMenuSection] = useState(null); // null | 'rename' | 'create' | 'deadline'
+  const [showArchived, setShowArchived] = useState(false);
 
-  const fetchTournaments = async () => {
+  const fetchTournaments = async (includeArchived = showArchived) => {
     try {
-      const res = await authFetch(`${API}/tournaments`);
+      const res = await authFetch(`${API}/tournaments${includeArchived ? '?include_archived=1' : ''}`);
       const data = await parseJson(res);
       const list = Array.isArray(data) ? data : [];
       setTournaments(list);
@@ -1971,19 +1972,22 @@ function App() {
           {siteTitle}
         </h1>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          {user ? (
-            <>
-              <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>{user.username} ({user.role})</span>
-              {isAdmin && (
-                <Link to="/settings" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Settings</Link>
-              )}
-              <button onClick={logout} style={{ padding: '8px 14px', fontSize: 14 }}>Logout</button>
-            </>
-          ) : (
-            <Link to="/login" state={{ from: location }} style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>
-              Login to edit
-            </Link>
-          )}
+          <>
+            <Link to="/winners" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Winners</Link>
+            {user ? (
+              <>
+                <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>{user.username} ({user.role})</span>
+                {isAdmin && (
+                  <Link to="/settings" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Settings</Link>
+                )}
+                <button onClick={logout} style={{ padding: '8px 14px', fontSize: 14 }}>Logout</button>
+              </>
+            ) : (
+              <Link to="/login" state={{ from: location }} style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>
+                Login to edit
+              </Link>
+            )}
+          </>
         </div>
       </div>
       <div style={{ marginBottom: 24, display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center', position: 'relative' }}>
@@ -1995,9 +1999,13 @@ function App() {
         >
           <option value="">Select...</option>
           {tournaments.map((t) => (
-            <option key={t.id} value={t.id}>{t.name} ({t.format})</option>
+            <option key={t.id} value={t.id}>{t.name} ({t.format}){t.archived ? ' [archived]' : ''}</option>
           ))}
         </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 14, color: 'var(--text-secondary)' }}>
+          <input type="checkbox" checked={showArchived} onChange={(e) => { setShowArchived(e.target.checked); fetchTournaments(e.target.checked); }} />
+          Show archived
+        </label>
         {canEdit && (
           <div style={{ position: 'relative' }}>
             <button
@@ -2039,6 +2047,9 @@ function App() {
                           </button>
                           <button onClick={() => { cloneTournament(); setMenuOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Copy participants and standby to a new tournament">
                             Clone
+                          </button>
+                          <button onClick={async () => { try { await authFetch(`${API}/tournaments/${tournamentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: !tournaments.find((t) => t.id === tournamentId)?.archived }) }); await fetchTournaments(showArchived); setMenuOpen(false); } catch (err) { setError(err.message); } }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Archive to hide from default list">
+                            {tournaments.find((t) => t.id === tournamentId)?.archived ? 'Unarchive' : 'Archive'}
                           </button>
                           <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0' }} />
                           <button onClick={() => deleteTournament()} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', color: 'var(--error)' }}>

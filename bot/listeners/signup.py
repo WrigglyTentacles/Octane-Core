@@ -65,21 +65,15 @@ async def _handle_reaction_add(payload: discord.RawReactionActionEvent, bot: com
                     pass
                 return
 
-        # Ensure user has registered (Player record)
+        # Get or create Player (open by default — no /register required)
         player_result = await session.execute(select(Player).where(Player.discord_id == payload.user_id))
         player = player_result.scalar_one_or_none()
         if not player:
-            try:
-                channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
-                user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
-                if channel and user:
-                    await channel.send(
-                        f"{user.mention} You need to `/register` first before signing up for tournaments.",
-                        delete_after=10,
-                    )
-            except Exception:
-                pass
-            return
+            user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
+            display_name = user.display_name if user else str(payload.user_id)
+            player = Player(discord_id=payload.user_id, display_name=display_name)
+            session.add(player)
+            await session.flush()  # Get player in session before adding Registration
 
         # Check if already registered
         existing = await session.execute(

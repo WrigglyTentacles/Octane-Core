@@ -48,6 +48,7 @@ _MIGRATIONS = [
     "ALTER TABLE bracket_matches ADD COLUMN loser_advances_to_slot INTEGER",
     "ALTER TABLE tournament_manual_entries ADD COLUMN original_list_type VARCHAR(16)",
     "UPDATE tournament_manual_entries SET original_list_type = list_type WHERE original_list_type IS NULL",
+    "ALTER TABLE tournaments ADD COLUMN archived INTEGER DEFAULT 0",
 ]
 
 

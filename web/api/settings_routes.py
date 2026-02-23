@@ -1,7 +1,8 @@
 """Site settings API: title, theme colors (public read, admin write)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -80,3 +81,33 @@ async def update_settings(body: SettingsUpdate, admin=Depends(require_admin_user
         bg_primary=await _get_setting("bg_primary"),
         bg_secondary=await _get_setting("bg_secondary"),
     )
+
+
+@router.get("/export")
+async def export_settings(admin=Depends(require_admin_user)):
+    """Export all site settings as JSON backup (admin only)."""
+    async with async_session_factory() as session:
+        result = await session.execute(select(SiteSettings))
+        rows = result.scalars().all()
+        backup = {row.key: row.value for row in rows}
+    return JSONResponse(content={"settings": backup})
+
+
+class SettingsImport(BaseModel):
+    settings: dict[str, str]
+
+
+@router.post("/import")
+async def import_settings(body: SettingsImport, admin=Depends(require_admin_user)):
+    """Restore site settings from a JSON backup (admin only). Overwrites existing keys."""
+    async with async_session_factory() as session:
+        result = await session.execute(select(SiteSettings))
+        rows = result.scalars().all()
+        existing = {row.key: row for row in rows}
+        for key, value in body.settings.items():
+            if key in existing:
+                existing[key].value = value
+            else:
+                session.add(SiteSettings(key=key, value=value))
+        await session.commit()
+    return {"ok": True, "restored": len(body.settings)}

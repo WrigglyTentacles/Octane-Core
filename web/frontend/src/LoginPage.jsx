@@ -101,7 +101,8 @@ export default function LoginPage() {
           </button>
         </form>
         <p style={{ marginTop: 20, fontSize: 13, color: 'var(--text-muted)' }}>
-          <Link to="/" style={{ color: 'var(--accent)' }}>← Back to brackets</Link>
+          <Link to="/" style={{ color: 'var(--accent)', marginRight: 12 }}>← Back to brackets</Link>
+          <Link to="/winners" style={{ color: 'var(--accent)' }}>🏆 Winners</Link>
         </p>
       </div>
     </div>

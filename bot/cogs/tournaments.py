@@ -219,11 +219,12 @@ async def register_cmd(interaction: discord.Interaction, tournament_id: int) -> 
     async for session in get_async_session():
         player = await get_player(session, interaction.user.id)
         if not player:
-            await interaction.followup.send(
-                "Register first with `/register`.",
-                ephemeral=True,
+            player = Player(
+                discord_id=interaction.user.id,
+                display_name=interaction.user.display_name or str(interaction.user),
             )
-            return
+            session.add(player)
+            await session.flush()
         t = await get_tournament(session, tournament_id, interaction.guild_id)
         if not t:
             await interaction.followup.send("Tournament not found.", ephemeral=True)

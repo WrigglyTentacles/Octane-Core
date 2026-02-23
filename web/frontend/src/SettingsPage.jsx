@@ -294,6 +294,72 @@ export default function SettingsPage() {
       </form>
 
       <div style={{ borderTop: '1px solid var(--border)', marginTop: 40, paddingTop: 32 }}>
+        <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Backup & restore</h2>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: 16, fontSize: 14 }}>
+          Export settings to a JSON file or restore from a previous backup.
+        </p>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const res = await authFetch(`${API}/settings/export`);
+                const data = await res.json();
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `octane-settings-${new Date().toISOString().slice(0, 10)}.json`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+              } catch (err) {
+                setError(err.message);
+              }
+            }}
+            style={{ padding: '8px 14px' }}
+          >
+            Export backup
+          </button>
+          <label style={{ padding: '8px 14px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 14 }}>
+            Restore from file
+            <input
+              type="file"
+              accept=".json"
+              style={{ display: 'none' }}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  const text = await file.text();
+                  const data = JSON.parse(text);
+                  const settings = data.settings || data;
+                  if (typeof settings !== 'object') throw new Error('Invalid backup format');
+                  const res = await authFetch(`${API}/settings/import`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ settings }),
+                  });
+                  const result = await res.json();
+                  if (!res.ok) throw new Error(result?.detail || 'Restore failed');
+                  setError('');
+                  const res2 = await fetch(`${API}/settings`);
+                  const fresh = await res2.json();
+                  setForm({ site_title: fresh.site_title || '', accent_color: fresh.accent_color || '', accent_hover: fresh.accent_hover || '', bg_primary: fresh.bg_primary || '', bg_secondary: fresh.bg_secondary || '' });
+                  document.documentElement.style.setProperty('--site-title', fresh.site_title);
+                  document.documentElement.style.setProperty('--accent', fresh.accent_color);
+                  document.documentElement.style.setProperty('--accent-hover', fresh.accent_hover);
+                  document.documentElement.style.setProperty('--bg-primary', fresh.bg_primary);
+                  document.documentElement.style.setProperty('--bg-secondary', fresh.bg_secondary);
+                } catch (err) {
+                  setError(err.message);
+                }
+                e.target.value = '';
+              }}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--border)', marginTop: 40, paddingTop: 32 }}>
         <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>User management</h2>
         <p style={{ color: 'var(--text-secondary)', marginBottom: 20, fontSize: 14 }}>
           Create and manage user, moderator, and admin accounts. Users can view; moderators and admins can edit brackets.

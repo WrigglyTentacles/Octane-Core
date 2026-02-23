@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from bot.models import User
 from web.auth import require_moderator_user
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -549,13 +549,108 @@ async def create_tournament(body: TournamentCreate):
         return {"id": t.id, "name": t.name, "format": t.format, "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None}
 
 
-@router.get("/tournaments")
-async def list_tournaments():
-    """List all tournaments."""
+@router.get("/winners")
+async def list_winners():
+    """List all-time tournament champions (completed, closed, or archived tournaments with a bracket winner)."""
     async with async_session_factory() as session:
         result = await session.execute(
-            select(Tournament).order_by(Tournament.id.desc()).limit(50)
+            select(Tournament)
+            .where(
+                or_(
+                    Tournament.status == "completed",
+                    Tournament.status == "closed",
+                    Tournament.archived == True,  # noqa: E712
+                )
+            )
+            .order_by(Tournament.id.desc())
+            .limit(100)
         )
+        tournaments = result.scalars().all()
+        winners = []
+        for t in tournaments:
+            bracket_result = await session.execute(
+                select(Bracket)
+                .where(Bracket.tournament_id == t.id)
+                .order_by(Bracket.id.desc())
+                .limit(1)
+            )
+            bracket = bracket_result.scalar_one_or_none()
+            if not bracket:
+                continue
+            # Find champion: grand_finals match (double elim) or highest round (single elim)
+            matches_result = await session.execute(
+                select(BracketMatch)
+                .where(BracketMatch.bracket_id == bracket.id)
+                .where(
+                    or_(
+                        BracketMatch.winner_team_id != None,  # noqa: E711
+                        BracketMatch.winner_player_id != None,  # noqa: E711
+                        BracketMatch.winner_manual_entry_id != None,  # noqa: E711
+                    )
+                )
+            )
+            champ_matches = matches_result.scalars().all()
+            champ_match = None
+            for m in champ_matches:
+                if m.bracket_section == "grand_finals":
+                    champ_match = m
+                    break
+            if not champ_match and champ_matches:
+                # Single elim: final has highest round_num (and typically highest match_num in that round)
+                champ_match = max(champ_matches, key=lambda x: (x.round_num, x.match_num))
+            if not champ_match:
+                continue
+            winner_name = None
+            winner_players = None  # List of player names for team formats
+            if champ_match.winner_team_id:
+                team_result = await session.execute(
+                    select(Team)
+                    .where(Team.id == champ_match.winner_team_id)
+                    .options(
+                        selectinload(Team.members).selectinload(Registration.player),
+                        selectinload(Team.manual_members).selectinload(TeamManualMember.manual_entry),
+                    )
+                )
+                team = team_result.scalar_one_or_none()
+                if team:
+                    winner_name = team.name
+                    player_names = []
+                    for reg in team.members:
+                        if reg.player:
+                            player_names.append(reg.player.display_name or str(reg.player.discord_id))
+                    for tmm in sorted(team.manual_members, key=lambda x: x.sort_order):
+                        if tmm.manual_entry:
+                            player_names.append(tmm.manual_entry.display_name)
+                    if player_names:
+                        winner_players = player_names
+            elif champ_match.winner_player_id:
+                player = await session.get(Player, champ_match.winner_player_id)
+                winner_name = player.display_name or str(player.discord_id) if player else None
+            elif champ_match.winner_manual_entry_id:
+                entry = await session.get(TournamentManualEntry, champ_match.winner_manual_entry_id)
+                winner_name = entry.display_name if entry else None
+            if winner_name:
+                row = {
+                    "tournament_id": t.id,
+                    "tournament_name": t.name,
+                    "format": t.format,
+                    "winner_name": winner_name,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                }
+                if winner_players is not None:
+                    row["winner_players"] = winner_players
+                winners.append(row)
+        return winners
+
+
+@router.get("/tournaments")
+async def list_tournaments(include_archived: bool = False):
+    """List tournaments. By default excludes archived. Use ?include_archived=1 to include them."""
+    async with async_session_factory() as session:
+        q = select(Tournament).order_by(Tournament.id.desc()).limit(50)
+        if not include_archived:
+            q = q.where(Tournament.archived == False)  # noqa: E712
+        result = await session.execute(q)
         tournaments = result.scalars().all()
         return [
             {
@@ -563,6 +658,7 @@ async def list_tournaments():
                 "name": t.name,
                 "format": t.format,
                 "status": t.status,
+                "archived": t.archived,
                 "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
             }
             for t in tournaments
@@ -573,6 +669,7 @@ class TournamentUpdate(BaseModel):
     name: Optional[str] = None
     format: Optional[str] = None
     status: Optional[str] = None
+    archived: Optional[bool] = None
     registration_deadline: Optional[str] = None  # ISO datetime; empty string to clear
 
 
@@ -604,6 +701,8 @@ async def update_tournament(tournament_id: int, body: TournamentUpdate, user: Us
                         await session.delete(bracket)
         if body.status is not None:
             t.status = body.status
+        if body.archived is not None:
+            t.archived = body.archived
         if body.registration_deadline is not None:
             t.registration_deadline = _parse_deadline(body.registration_deadline)
         await session.commit()
@@ -642,6 +741,7 @@ async def clone_tournament(
             format=fmt,
             mmr_playlist=_mmr_for_format(fmt),
             status="open",
+            archived=False,
         )
         session.add(t)
         await session.flush()
@@ -797,6 +897,23 @@ async def swap_match_winner_route(
         return {"ok": True}
 
 
+def _champion_match_has_winner(matches_with_winners: list, bracket_type: str) -> bool:
+    """True if the champion (final) match among these has a winner set."""
+    if not matches_with_winners:
+        return False
+    if bracket_type == "double_elim":
+        for m in matches_with_winners:
+            if m.bracket_section == "grand_finals":
+                return True
+        return False
+    # Single elim: final has highest round_num among matches with bracket_section None
+    single_elim_matches = [m for m in matches_with_winners if m.bracket_section is None]
+    if not single_elim_matches:
+        return False
+    max_round = max(m.round_num for m in single_elim_matches)
+    return any(m.round_num == max_round for m in single_elim_matches)
+
+
 @router.patch("/tournaments/{tournament_id}/bracket/matches/{match_id}")
 async def update_match(
     tournament_id: int,
@@ -804,7 +921,7 @@ async def update_match(
     body: BracketMatchUpdate,
     user: User = Depends(require_moderator_user),
 ):
-    """Update a bracket match (assign teams/players, set winner). Single elim: advance when round complete (randomize bye, exclude teams that had bye). Double elim: advance immediately."""
+    """Update a bracket match (assign teams/players, set winner). Single elim: advance when round complete (randomize bye, exclude teams that had bye). Double elim: advance immediately. Auto-sets tournament to completed when champion is declared."""
     from bot.services.bracket_gen import advance_round_when_complete, advance_winner_to_parent
 
     async with async_session_factory() as session:
@@ -829,6 +946,21 @@ async def update_match(
                     await advance_round_when_complete(session, bracket.id, match.round_num, is_team)
                 else:
                     await advance_winner_to_parent(session, match, is_team)
+                # Auto-complete tournament when champion is declared (direct or via advancement)
+                champ_matches_result = await session.execute(
+                    select(BracketMatch)
+                    .where(BracketMatch.bracket_id == bracket.id)
+                    .where(
+                        or_(
+                            BracketMatch.winner_team_id != None,  # noqa: E711
+                            BracketMatch.winner_player_id != None,  # noqa: E711
+                            BracketMatch.winner_manual_entry_id != None,  # noqa: E711
+                        )
+                    )
+                )
+                champ_matches = champ_matches_result.scalars().all()
+                if _champion_match_has_winner(champ_matches, bracket.bracket_type):
+                    t.status = "completed"
             await session.commit()
         except Exception as e:
             await session.rollback()

@@ -45,7 +45,7 @@ async def register(interaction: discord.Interaction) -> None:
         break
 
     await interaction.followup.send(
-        "You're registered! Use `/tournament register <id>` to sign up for tournaments. "
+        "You're registered! Use `/tournament register <id>` or react to signup posts to join tournaments. "
         "MMR lookup is optional — use `/mmrcheck [username]` to look up any Epic username.",
         ephemeral=True,
     )
@@ -60,7 +60,7 @@ async def profile(interaction: discord.Interaction) -> None:
         player = await get_player(session, interaction.user.id)
         if not player:
             await interaction.followup.send(
-                "You haven't registered yet. Use `/register` to register for tournaments.",
+                "You haven't registered yet. Use `/register` to set up your profile (optional for tournaments).",
                 ephemeral=True,
             )
             return

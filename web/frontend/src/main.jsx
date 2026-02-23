@@ -6,6 +6,7 @@ import { AuthProvider } from './AuthContext';
 import App from './App';
 import LoginPage from './LoginPage';
 import SettingsPage from './SettingsPage';
+import WinnersPage from './WinnersPage';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -13,6 +14,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <AuthProvider>
         <Routes>
           <Route path="/" element={<App />} />
+          <Route path="/winners" element={<WinnersPage />} />
           <Route path="/participants" element={<App />} />
           <Route path="/standby" element={<App />} />
           <Route path="/teams" element={<App />} />
