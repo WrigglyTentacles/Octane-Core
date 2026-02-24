@@ -284,18 +284,30 @@ async def remove_registration(tournament_id: int, player_id: int, user: User = D
 
 @router.get("/tournaments/{tournament_id}/standby")
 async def list_standby(tournament_id: int):
-    """List standby/seat filler entries. Includes those originally standby (even if now substituted in)."""
+    """List standby/seat filler entries. Excludes those currently in a team to avoid duplicate listing."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
         if not t:
             raise HTTPException(404, "Tournament not found")
+        # Exclude manual entries that are in a team - they're participating, not in standby pool
+        in_team_subq = (
+            select(TeamManualMember.manual_entry_id)
+            .join(Team, Team.id == TeamManualMember.team_id)
+            .where(Team.tournament_id == tournament_id)
+        )
         result = await session.execute(
             select(TournamentManualEntry)
             .where(
                 TournamentManualEntry.tournament_id == tournament_id,
-                # Show everyone originally standby (coalesce for migrated rows)
-                (TournamentManualEntry.original_list_type == "standby")
-                | ((TournamentManualEntry.original_list_type.is_(None)) & (TournamentManualEntry.list_type == "standby")),
+                # Show originally standby, but exclude those currently in a team (avoids participant+standby duplicate)
+                (
+                    (TournamentManualEntry.original_list_type == "standby")
+                    | (
+                        (TournamentManualEntry.original_list_type.is_(None))
+                        & (TournamentManualEntry.list_type == "standby")
+                    )
+                ),
+                TournamentManualEntry.id.not_in(in_team_subq),
             )
             .order_by(TournamentManualEntry.sort_order, TournamentManualEntry.id)
         )
@@ -489,7 +501,11 @@ async def list_teams(tournament_id: int):
         members_by_team: dict[int, list[dict]] = {}
         for team in teams:
             manual = [
-                {"id": m.manual_entry.id, "display_name": m.manual_entry.display_name}
+                {
+                    "id": m.manual_entry.id,
+                    "display_name": m.manual_entry.display_name,
+                    "original_list_type": m.manual_entry.original_list_type,
+                }
                 for m in sorted(team.manual_members, key=lambda x: x.sort_order)
             ]
             discord = [
@@ -575,11 +591,12 @@ async def regenerate_teams(tournament_id: int, user: User = Depends(require_mode
         # Do NOT change list_type to "participant" - that would create duplicates (standby
         # would appear in both participants and standby lists, breaking subsequent regenerations)
 
-        # Pool order: participants, Discord, standby (standby used last when filling)
-        pool: list[tuple[str, object]] = [(e, "manual") for e in manual_participants]
-        pool += [(r, "discord") for r in discord_regs]
-        pool += [(e, "manual") for e in manual_standby]
-        random.shuffle(pool)
+        # Pool: participants + Discord shuffled together; standby used last (shuffled separately).
+        participants_and_discord: list[tuple[object, str]] = [(e, "manual") for e in manual_participants]
+        participants_and_discord += [(r, "discord") for r in discord_regs]
+        random.shuffle(participants_and_discord)
+        random.shuffle(manual_standby)
+        pool: list[tuple[object, str]] = participants_and_discord + [(e, "manual") for e in manual_standby]
 
         if len(pool) < players_per_team:
             raise HTTPException(400, f"Need at least {players_per_team} players to form teams")
