@@ -15,6 +15,9 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 BOT_INTERNAL_URL = os.getenv("BOT_INTERNAL_URL", "http://bot:8001")  # URL the web API uses to reach the bot
 INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")  # Shared secret for web->bot requests
 
+# Public site URL (e.g. https://tournaments.example.com) — used in Discord embeds for /current link
+SITE_URL = os.getenv("SITE_URL", "").rstrip("/")
+
 # Rocket League API
 RLAPI_CLIENT_ID = os.getenv("RLAPI_CLIENT_ID", "")
 RLAPI_CLIENT_SECRET = os.getenv("RLAPI_CLIENT_SECRET", "")

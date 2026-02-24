@@ -787,27 +787,35 @@ async def list_winners():
 
 
 @router.get("/tournaments/current")
-async def get_current_tournament():
-    """Get the latest active (open or in_progress) non-archived tournament. Public, no auth required. Reopened tournaments qualify as current."""
+async def get_current_tournament(tournament_id: Optional[int] = None):
+    """Get open tournaments for /current page. Returns list of open/in_progress tournaments with default_id (latest).
+    Optional tournament_id returns that specific tournament if it's open."""
     async with async_session_factory() as session:
         result = await session.execute(
             select(Tournament)
             .where(Tournament.archived == False)  # noqa: E712
             .where(Tournament.status.in_(["open", "in_progress"]))
             .order_by(Tournament.id.desc())
-            .limit(1)
+            .limit(50)
         )
-        t = result.scalar_one_or_none()
-        if not t:
-            return None
-        return {
-            "id": t.id,
-            "name": t.name,
-            "format": t.format,
-            "status": t.status,
-            "archived": t.archived,
-            "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
-        }
+        tournaments = result.scalars().all()
+        if not tournaments:
+            return {"tournaments": [], "default_id": None}
+        default_id = tournaments[0].id
+        list_data = [
+            {
+                "id": t.id,
+                "name": t.name,
+                "format": t.format,
+                "status": t.status,
+                "archived": t.archived,
+                "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+            }
+            for t in tournaments
+        ]
+        if tournament_id and any(t.id == tournament_id for t in tournaments):
+            return {"tournaments": list_data, "default_id": default_id, "selected_id": tournament_id}
+        return {"tournaments": list_data, "default_id": default_id}
 
 
 @router.get("/tournaments")

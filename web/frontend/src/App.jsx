@@ -1454,11 +1454,18 @@ function App({ isCurrentPage = false }) {
   const fetchTournaments = async (includeArchived = showArchived) => {
     try {
       if (isCurrentPage) {
-        const res = await fetch(`${API}/tournaments/current`);
+        const url = tournamentId ? `${API}/tournaments/current?tournament_id=${tournamentId}` : `${API}/tournaments/current`;
+        const res = await fetch(url);
         const data = await parseJson(res);
-        const list = data ? [data] : [];
+        const list = data?.tournaments ?? [];
         setTournaments(list);
-        if (list.length) setTournamentId(list[0].id);
+        if (list.length) {
+          const defaultId = data?.default_id ?? list[0].id;
+          const selectedId = data?.selected_id ?? defaultId;
+          setTournamentId(selectedId);
+        } else {
+          setTournamentId(null);
+        }
         return list;
       }
       const res = await authFetch(`${API}/tournaments${includeArchived ? '?include_archived=1' : ''}`);
@@ -2104,21 +2111,39 @@ function App({ isCurrentPage = false }) {
         </div>
       </div>
       <div style={{ marginBottom: 24, display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center', position: 'relative' }}>
-        {isCurrentPage && tournamentId && (() => {
-          const t = tournaments.find((x) => x.id === tournamentId);
-          if (!t) return null;
-          const statusConfig = { open: { label: 'Open', color: 'var(--success)', bg: 'rgba(34,197,94,0.15)' }, completed: { label: 'Completed', color: '#eab308', bg: 'rgba(234,179,8,0.15)' }, closed: { label: 'Closed', color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' }, in_progress: { label: 'In progress', color: 'var(--accent)', bg: 'var(--accent-muted)' } };
-          const cfg = statusConfig[t.status] || { label: t.status, color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' };
-          return (
-            <>
-              <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>{t.name}</span>
-              <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 6 }}>ID: {t.id}</span>
-              <span style={{ fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 20, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.color}40` }}>
-                {cfg.label}
-              </span>
-            </>
-          );
-        })()}
+        {isCurrentPage && (
+          <>
+            {tournaments.length > 1 ? (
+              <>
+                <label style={{ color: 'var(--text-secondary)' }}>Tournament:</label>
+                <select
+                  value={tournamentId ?? ''}
+                  onChange={(e) => { setTournamentId(Number(e.target.value) || null); }}
+                  style={{ padding: '10px 14px', minWidth: 220 }}
+                >
+                  {tournaments.map((t) => (
+                    <option key={t.id} value={t.id}>[{t.id}] {t.name} ({t.format}) — {t.status === 'open' ? 'Open' : t.status}</option>
+                  ))}
+                </select>
+              </>
+            ) : null}
+            {tournamentId && (() => {
+              const t = tournaments.find((x) => x.id === tournamentId);
+              if (!t) return null;
+              const statusConfig = { open: { label: 'Open', color: 'var(--success)', bg: 'rgba(34,197,94,0.15)' }, completed: { label: 'Completed', color: '#eab308', bg: 'rgba(234,179,8,0.15)' }, closed: { label: 'Closed', color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' }, in_progress: { label: 'In progress', color: 'var(--accent)', bg: 'var(--accent-muted)' } };
+              const cfg = statusConfig[t.status] || { label: t.status, color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' };
+              return (
+                <>
+                  <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>{t.name}</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 6 }}>ID: {t.id}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 20, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.color}40` }}>
+                    {cfg.label}
+                  </span>
+                </>
+              );
+            })()}
+          </>
+        )}
         {!isCurrentPage && (
           <>
         <label style={{ color: 'var(--text-secondary)' }}>Tournament:</label>

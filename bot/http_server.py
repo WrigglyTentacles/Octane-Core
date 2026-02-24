@@ -25,6 +25,9 @@ def _build_signup_embed(t: Tournament, count: int) -> discord.Embed:
             dt = dt.replace(tzinfo=timezone.utc)
         ts = int(dt.timestamp())
         deadline_line = f"**Signup deadline:** <t:{ts}:F> (<t:{ts}:R>)\n\n"
+    current_link = ""
+    if config.SITE_URL:
+        current_link = f"\n\n**View bracket:** {config.SITE_URL}/current"
     embed = discord.Embed(
         title=f"📋 {t.name}",
         description=(
@@ -34,6 +37,7 @@ def _build_signup_embed(t: Tournament, count: int) -> discord.Embed:
             f"React with {SIGNUP_EMOJI} to sign up!\n"
             f"Remove your reaction to drop out.\n\n"
             f"*Or use `/tournament register` with ID **{t.id}***"
+            f"{current_link}"
         ),
         color=discord.Color.green(),
     )
