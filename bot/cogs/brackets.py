@@ -36,8 +36,33 @@ async def get_tournament(session: AsyncSession, tournament_id: int, guild_id: in
     return result.scalar_one_or_none()
 
 
-async def resolve_entity(session: AsyncSession, entity_id: int, is_team: bool) -> str:
-    """Resolve player or team ID to display name. For teams, includes all members (Discord + manual)."""
+async def resolve_entity(
+    session: AsyncSession,
+    entity_id: int,
+    is_team: bool,
+    guild: discord.Guild | None = None,
+    client: discord.Client | None = None,
+) -> str:
+    """Resolve player or team ID to display name. When guild/client provided, fetches from Discord if DB has none."""
+
+    async def _fetch_discord_name(uid: int) -> str | None:
+        """Try guild fetch first, then global fetch. Returns display name or None."""
+        if guild:
+            try:
+                mem = await guild.fetch_member(uid)
+                if mem:
+                    return mem.display_name or mem.name
+            except (discord.NotFound, discord.HTTPException):
+                pass
+        if client:
+            try:
+                user = await client.fetch_user(uid)
+                if user:
+                    return user.display_name or user.name
+            except (discord.NotFound, discord.HTTPException):
+                pass
+        return None
+
     if is_team:
         result = await session.execute(
             select(Team)
@@ -49,15 +74,31 @@ async def resolve_entity(session: AsyncSession, entity_id: int, is_team: bool) -
         )
         team = result.scalar_one_or_none()
         if team:
-            members = [m.player.display_name or str(m.player.discord_id) for m in team.members]
-            members += [m.manual_entry.display_name for m in sorted(team.manual_members, key=lambda x: x.sort_order)]
-            return team.name + " (" + ", ".join(members) + ")" if members else team.name
+            member_names = []
+            for m in team.members:
+                if m.player:
+                    n = m.player.display_name or None
+                    if not n:
+                        n = await _fetch_discord_name(m.player.discord_id)
+                    member_names.append(n or str(m.player.discord_id))
+                else:
+                    n = await _fetch_discord_name(m.player_id) if (guild or client) else None
+                    member_names.append(n or str(m.player_id))
+            member_names += [
+                m.manual_entry.display_name for m in sorted(team.manual_members, key=lambda x: x.sort_order)
+                if m.manual_entry
+            ]
+            return team.name + " (" + ", ".join(member_names) + ")" if member_names else team.name
         return f"Team #{entity_id}"
     else:
         player = await session.get(Player, entity_id)
         if player:
-            return player.display_name or str(player.discord_id)
-        return f"Player #{entity_id}"
+            name = player.display_name or None
+            if not name:
+                name = await _fetch_discord_name(entity_id)
+            return name or str(player.discord_id)
+        name = await _fetch_discord_name(entity_id) if (guild or client) else None
+        return name or f"Player #{entity_id}"
 
 
 async def resolve_match_slot(
@@ -65,20 +106,22 @@ async def resolve_match_slot(
     match: BracketMatch,
     slot: int,
     is_team: bool,
+    guild: discord.Guild | None = None,
+    client: discord.Client | None = None,
 ) -> str:
     """Resolve slot 1 or 2 of a match to display name (handles player, team, or manual entry)."""
     if is_team:
         tid = match.team1_id if slot == 1 else match.team2_id
-        return await resolve_entity(session, tid, True) if tid else "TBD"
+        return await resolve_entity(session, tid, True, guild, client) if tid else "TBD"
     if slot == 1:
         if match.player1_id:
-            return await resolve_entity(session, match.player1_id, False)
+            return await resolve_entity(session, match.player1_id, False, guild, client)
         if match.manual_entry1_id:
             entry = await session.get(TournamentManualEntry, match.manual_entry1_id)
             return entry.display_name if entry else "TBD"
     else:
         if match.player2_id:
-            return await resolve_entity(session, match.player2_id, False)
+            return await resolve_entity(session, match.player2_id, False, guild, client)
         if match.manual_entry2_id:
             entry = await session.get(TournamentManualEntry, match.manual_entry2_id)
             return entry.display_name if entry else "TBD"
@@ -155,22 +198,23 @@ async def view(interaction: discord.Interaction, tournament_id: int) -> None:
         )
         matches = matches_result.scalars().all()
         is_team = t.format != "1v1"
+        guild = interaction.guild
         by_round = {}
         for m in matches:
             r = m.round_num
             if r not in by_round:
                 by_round[r] = []
             if is_team:
-                t1 = await resolve_entity(session, m.team1_id, True) if m.team1_id else "TBD"
-                t2 = await resolve_entity(session, m.team2_id, True) if m.team2_id else "TBD"
+                t1 = await resolve_entity(session, m.team1_id, True, guild) if m.team1_id else "TBD"
+                t2 = await resolve_entity(session, m.team2_id, True, guild) if m.team2_id else "TBD"
             else:
-                t1 = await resolve_entity(session, m.player1_id, False) if m.player1_id else "TBD"
-                t2 = await resolve_entity(session, m.player2_id, False) if m.player2_id else "TBD"
+                t1 = await resolve_entity(session, m.player1_id, False, guild) if m.player1_id else "TBD"
+                t2 = await resolve_entity(session, m.player2_id, False, guild) if m.player2_id else "TBD"
             winner = ""
             if m.winner_team_id:
-                winner = " → " + (await resolve_entity(session, m.winner_team_id, True))
+                winner = " → " + (await resolve_entity(session, m.winner_team_id, True, guild))
             elif m.winner_player_id:
-                winner = " → " + (await resolve_entity(session, m.winner_player_id, False))
+                winner = " → " + (await resolve_entity(session, m.winner_player_id, False, guild))
             by_round[r].append(f"[{m.id}] Match {m.match_num}: {t1} vs {t2}{winner}")
         embed = discord.Embed(title=f"Bracket — {t.name}", color=discord.Color.purple())
         for r in sorted(by_round.keys()):
@@ -302,7 +346,7 @@ async def next_match(interaction: discord.Interaction, tournament_id: int | None
 
         if current_match:
             m, my_slot, opp_slot = current_match
-            opp_name = await resolve_match_slot(session, m, opp_slot, is_team)
+            opp_name = await resolve_match_slot(session, m, opp_slot, is_team, interaction.guild, interaction.client)
             embed = discord.Embed(
                 title=f"Your current match — {t.name}",
                 description=f"**Round {m.round_num}**, Match {m.match_num}",
@@ -315,7 +359,7 @@ async def next_match(interaction: discord.Interaction, tournament_id: int | None
 
         if next_match:
             m, my_slot, opp_slot = next_match
-            opp_name = await resolve_match_slot(session, m, opp_slot, is_team)
+            opp_name = await resolve_match_slot(session, m, opp_slot, is_team, interaction.guild, interaction.client)
             embed = discord.Embed(
                 title=f"Your next match — {t.name}",
                 description=f"**Round {m.round_num}**, Match {m.match_num}",
@@ -342,7 +386,7 @@ async def next_match(interaction: discord.Interaction, tournament_id: int | None
                 if loser_match:
                     next_match = (loser_match, m.loser_advances_to_slot, 2 if m.loser_advances_to_slot == 1 else 1)
                     m, my_slot, opp_slot = next_match
-                    opp_name = await resolve_match_slot(session, m, opp_slot, is_team)
+                    opp_name = await resolve_match_slot(session, m, opp_slot, is_team, interaction.guild, interaction.client)
                     embed = discord.Embed(
                         title=f"Your next match (losers) — {t.name}",
                         description=f"**Round {m.round_num}**, Match {m.match_num}",
@@ -474,8 +518,8 @@ async def bracket_status(interaction: discord.Interaction, tournament_id: int | 
                 continue
             has_winner = bool(m.winner_team_id or m.winner_player_id or m.winner_manual_entry_id)
             my_slot = 1 if ((is_team and m.team1_id == my_entity_id) or (not is_team and m.player1_id == my_entity_id)) else 2
-            slot1_name = await resolve_match_slot(session, m, 1, is_team)
-            slot2_name = await resolve_match_slot(session, m, 2, is_team)
+            slot1_name = await resolve_match_slot(session, m, 1, is_team, interaction.guild, interaction.client)
+            slot2_name = await resolve_match_slot(session, m, 2, is_team, interaction.guild, interaction.client)
             match_display = f"{slot1_name} vs {slot2_name}"
             section = m.bracket_section or ""
 
@@ -490,9 +534,10 @@ async def bracket_status(interaction: discord.Interaction, tournament_id: int | 
         previous.sort(key=lambda x: (x[0].round_num, x[0].match_num))
 
         # Find next matches: from last completed win (parent) or from loss (loser_advances)
+        guild, client = interaction.guild, interaction.client
         async def match_both_slots(session, m, is_team):
-            s1 = await resolve_match_slot(session, m, 1, is_team)
-            s2 = await resolve_match_slot(session, m, 2, is_team)
+            s1 = await resolve_match_slot(session, m, 1, is_team, guild, client)
+            s2 = await resolve_match_slot(session, m, 2, is_team, guild, client)
             return f"{s1} vs {s2}"
 
         if not current_match and previous:
@@ -571,8 +616,8 @@ async def bracket_status(interaction: discord.Interaction, tournament_id: int | 
         if future_chain:
             lines = []
             for m in future_chain:
-                s1 = await resolve_match_slot(session, m, 1, is_team)
-                s2 = await resolve_match_slot(session, m, 2, is_team)
+                s1 = await resolve_match_slot(session, m, 1, is_team, guild, client)
+                s2 = await resolve_match_slot(session, m, 2, is_team, guild, client)
                 lines.append(f"**R{m.round_num} M{m.match_num}**: {s1} vs {s2}")
             embed.add_field(name="Road ahead (if you keep winning)", value="\n".join(lines), inline=False)
 
@@ -588,12 +633,23 @@ async def bracket_status(interaction: discord.Interaction, tournament_id: int | 
 
 
 @bracket_group.command(name="post", description="Post current round lineup to channel (Moderator+)")
-@app_commands.describe(tournament_id="Tournament ID (optional — uses most recent active if omitted)")
+@app_commands.describe(
+    tournament_id="Tournament ID (optional — uses most recent active if omitted)",
+    channel="Channel to post in (default: current channel)",
+)
 @mod_or_higher()
-async def bracket_post(interaction: discord.Interaction, tournament_id: int | None = None) -> None:
+async def bracket_post(
+    interaction: discord.Interaction,
+    tournament_id: int | None = None,
+    channel: discord.TextChannel | None = None,
+) -> None:
     """Post the current round lineup for the whole channel — all matches that need to be played this round."""
     if not interaction.guild_id:
         await interaction.response.send_message("Use this in a server.", ephemeral=True)
+        return
+    target_channel = channel or interaction.channel
+    if not isinstance(target_channel, discord.TextChannel):
+        await interaction.response.send_message("Cannot post in this channel type.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
 
@@ -675,20 +731,40 @@ async def bracket_post(interaction: discord.Interaction, tournament_id: int | No
         section, round_num = current_round_key
         round_label = f"Round {round_num} ({section})" if section != "main" else f"Round {round_num}"
 
-        embed = discord.Embed(
-            title=f"Current round — {t.name}",
-            description=f"**{round_label}** — Tournament ID: `{t.id}`\nUse `/bracket next` or `/bracket status` for your match",
-            color=discord.Color.blue(),
-        )
-
+        guild, client = interaction.guild, interaction.client
         lines = []
         for m in sorted(current_round_matches, key=lambda x: x.match_num):
-            s1 = await resolve_match_slot(session, m, 1, is_team)
-            s2 = await resolve_match_slot(session, m, 2, is_team)
-            lines.append(f"**M{m.id}** — {s1} vs {s2}")
-        embed.add_field(name="Matches", value="\n".join(lines), inline=False)
+            s1 = await resolve_match_slot(session, m, 1, is_team, guild, client)
+            s2 = await resolve_match_slot(session, m, 2, is_team, guild, client)
+            lines.append(f"**R{m.round_num} M{m.match_num}** (ID: {m.id}) — {s1} vs {s2}")
 
-        await interaction.followup.send(embed=embed, ephemeral=False)
+        embed = discord.Embed(
+            title=f"🏆 Round {round_num} — {t.name}",
+            description=(
+                f"**Current round lineup** — teams facing each other this round.\n\n"
+                f"Use `/bracket next` or `/bracket status` for your match.\n"
+                f"Moderators: use `/bracket update` with match ID to record results."
+            ),
+            color=discord.Color.blue(),
+        )
+        embed.add_field(name="Matches", value="\n".join(lines), inline=False)
+        embed.set_footer(text=f"Tournament ID: {t.id}")
+        embed.timestamp = discord.utils.utcnow()
+
+        try:
+            await target_channel.send(embed=embed)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                f"Missing Access: I can't post in {target_channel.mention}. "
+                "Ensure my role has Send Messages and Embed Links.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            f"Posted current round lineup to {target_channel.mention}.",
+            ephemeral=True,
+        )
         return
 
 
@@ -733,10 +809,9 @@ async def update(
             match.winner_team_id = match.team2_id if is_team else None
             match.winner_player_id = match.player2_id if not is_team else None
         await session.commit()
+        winner_id = match.winner_team_id or match.winner_player_id
         winner_name = await resolve_entity(
-            session,
-            match.winner_team_id or match.winner_player_id,
-            is_team,
-        )
+            session, winner_id, is_team, interaction.guild, interaction.client
+        ) if winner_id else "—"
         await interaction.followup.send(f"Recorded winner: **{winner_name}**", ephemeral=True)
         return

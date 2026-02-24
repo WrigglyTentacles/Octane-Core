@@ -1515,6 +1515,26 @@ function App({ isCurrentPage = false }) {
     fetchData();
   }, [tournamentId]);
 
+  // Poll for updates so UI stays in sync (e.g. Discord updates, other users editing)
+  const POLL_INTERVAL_MS = 15000; // 15 seconds
+  const TOURNAMENTS_POLL_MS = 30000; // 30 seconds
+  useEffect(() => {
+    if (!tournamentId) return;
+    const id = setInterval(() => {
+      if (document.hidden) return; // Pause when tab is in background
+      fetchData({ silent: true });
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [tournamentId]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.hidden) return;
+      fetchTournaments(showArchived);
+    }, TOURNAMENTS_POLL_MS);
+    return () => clearInterval(id);
+  }, [showArchived]);
+
   // Restore last tab on initial load when landing at /
   const hasRestoredTab = useRef(false);
   useEffect(() => {
