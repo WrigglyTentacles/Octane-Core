@@ -404,13 +404,18 @@ async def advance_round_when_complete(
     if not round_matches:
         return
 
-    # Check all have winners
+    # Check all have winners (bye matches count as won by the team in the filled slot)
     winners = []
     for m in round_matches:
         entity = _get_winner_entity(m, is_team)
+        had_bye = _match_had_bye(m)
+        if not entity and had_bye:
+            entity = _get_entity_from_slot(m, 1, is_team)
+            if entity:
+                _assign_winner_from_entity(m, entity, is_team)
+                await session.flush()
         if not entity:
             return  # Round not complete
-        had_bye = _match_had_bye(m)
         winners.append((m, entity, had_bye))
 
     # Get next round matches
@@ -501,6 +506,19 @@ async def advance_round_when_complete(
             else:
                 parent.winner_player_id = parent.player2_id
             await advance_round_when_complete(session, bracket_id, round_num + 1, is_team)
+
+
+def _assign_winner_from_entity(m: BracketMatch, entity: Tuple, is_team: bool) -> None:
+    """Set winner on match from entity tuple (team_id, True) or (player_id, False, False) or (('manual', id), False, True)."""
+    m.winner_team_id = None
+    m.winner_player_id = None
+    m.winner_manual_entry_id = None
+    if entity[1] is True and len(entity) == 2:  # team
+        m.winner_team_id = entity[0]
+    elif len(entity) == 3 and entity[2] is True:  # manual
+        m.winner_manual_entry_id = entity[0][1]
+    else:  # player
+        m.winner_player_id = entity[0]
 
 
 def _get_entity_from_slot(m: BracketMatch, slot: int, is_team: bool) -> Optional[Tuple]:
@@ -617,9 +635,19 @@ async def swap_slots(
     _assign_entity_to_match(to_match, to_slot, from_entity, is_team)
     _assign_entity_to_match(from_match, from_slot, to_entity, is_team)
 
-    await _clear_winner_and_ancestors(session, from_match, is_team)
-    if from_match_id != to_match_id:
+    is_advancing_to_parent = (
+        from_match.parent_match_id == to_match_id and from_match.parent_match_slot == to_slot
+    )
+    if not is_advancing_to_parent:
+        await _clear_winner_and_ancestors(session, from_match, is_team)
+    if from_match_id != to_match_id and not is_advancing_to_parent:
         await _clear_winner_and_ancestors(session, to_match, is_team)
+
+    # When advancing to parent (drag winner to next round), set winner and trigger round advance
+    if is_advancing_to_parent and b.bracket_type == "single_elim":
+        _assign_winner_from_entity(from_match, from_entity, is_team)
+        await session.flush()
+        await advance_round_when_complete(session, b.id, from_match.round_num, is_team)
 
 
 async def swap_match_winner(

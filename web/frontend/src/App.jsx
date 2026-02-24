@@ -23,6 +23,15 @@ import { CSS } from '@dnd-kit/utilities';
 const API = '/api';
 const STORAGE_KEY = 'octane-selected-tournament';
 const TAB_STORAGE_KEY = 'octane-selected-tab';
+const POLL_INTERVAL_STORAGE_KEY = 'octane-poll-interval';
+
+const POLL_INTERVAL_OPTIONS = [
+  { value: 2000, label: '2 seconds' },
+  { value: 4000, label: '4 seconds' },
+  { value: 8000, label: '8 seconds' },
+  { value: 15000, label: '15 seconds' },
+  { value: 30000, label: '30 seconds' },
+];
 
 /** Convert UTC ISO string to datetime-local value (local timezone). */
 function utcToDatetimeLocal(isoStr) {
@@ -847,7 +856,7 @@ function SubstituteForm({ teams, standby, onSubstitute }) {
   );
 }
 
-function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPreview, onDrop, onSwapSlots, matchId, slot, onAdvanceOpponent, onSetWinner, hasOpponent, canSetWinner, canEdit }) {
+function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPreview, onDrop, onSwapSlots, matchId, slot, onAdvanceOpponent, onSetWinner, hasOpponent, canSetWinner, canEdit, hasBye }) {
   const content = isTeam && teams?.length ? (
     <TeamSlot name={name} teamId={teamId} teams={teams} isTeam={true} />
   ) : (
@@ -894,8 +903,8 @@ function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPrevi
     );
   }
   const canClickWinner = canEdit && canSetWinner && name && name !== 'TBD' && name !== 'BYE' && onSetWinner;
-  const isDropout = canEdit && name && name !== 'TBD' && name !== 'BYE' && !hasOpponent && onAdvanceOpponent;
-  const showWinnerBtn = canClickWinner || isDropout;
+  const isDropout = canEdit && name && name !== 'TBD' && name !== 'BYE' && !hasOpponent && onAdvanceOpponent && !hasBye;
+  const showWinnerBtn = (canClickWinner || isDropout) && !hasBye;
   const handleWinnerClick = () => {
     if (canClickWinner) onSetWinner(matchId, slot);
     else if (isDropout) onAdvanceOpponent(matchId, slot === 1 ? 2 : 1);
@@ -958,16 +967,19 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwap
   const renderMatchBlock = (m, roundNum) => {
     const s1 = m.team1_name || m.player1_name || 'TBD';
     const s2 = m.team2_name || m.player2_name || 'TBD';
+    const slot1Filled = !!(m.team1_id || m.manual_entry1_id || m.player1_id);
+    const slot2Filled = !!(m.team2_id || m.manual_entry2_id || m.player2_id);
+    const hasBye = (slot1Filled && !slot2Filled) || (slot2Filled && !slot1Filled);
     const w1 = m.winner_name === s1;
     const w2 = m.winner_name === s2;
     const bothFilled = (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id);
-    const canSetWinner = bothFilled && !m.winner_name;
+    const canSetWinner = bothFilled && !m.winner_name && !hasBye;
     const isChampion = m.winner_name && String(roundNum) === String(lastRoundNum);
     return (
       <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 0, minWidth: colW }}>
-        <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teams} teamId={m.team1_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={1} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} />
+        <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teams} teamId={m.team1_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={1} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} hasBye={hasBye} />
         <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
-        <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teams} teamId={m.team2_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={2} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} />
+        <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teams} teamId={m.team2_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={2} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} hasBye={hasBye} />
         {m.winner_name && (
           isChampion ? (
             <div className="grand-final-winners-zone" style={{ overflow: 'visible' }}>
@@ -1178,7 +1190,8 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
   );
 }
 
-/** Infer winner from advancement: if a team was dragged to the next round, they won their previous match. */
+/** Infer winner from advancement or bye: (1) if a team was dragged to the next round, they won;
+ * (2) if one slot is BYE, the team in the other slot wins by default. */
 function enrichRoundsWithInferredWinners(rounds) {
   if (!rounds || typeof rounds !== 'object') return rounds;
   const allMatches = Object.values(rounds).flat();
@@ -1187,6 +1200,18 @@ function enrichRoundsWithInferredWinners(rounds) {
   for (const [r, matches] of Object.entries(rounds)) {
     enriched[r] = matches.map((m) => {
       const copy = { ...m };
+      const s1 = copy.team1_name || copy.player1_name || 'TBD';
+      const s2 = copy.team2_name || copy.player2_name || 'TBD';
+      const slot1Filled = !!(copy.team1_id || copy.manual_entry1_id || copy.player1_id);
+      const slot2Filled = !!(copy.team2_id || copy.manual_entry2_id || copy.player2_id);
+      const hasBye = (slot1Filled && !slot2Filled) || (slot2Filled && !slot1Filled);
+      if (!copy.winner_name && hasBye) {
+        const teamName = s1 === 'BYE' ? s2 : s1;
+        if (teamName && teamName !== 'TBD') {
+          copy.winner_name = teamName;
+          copy.inferred_winner = true;
+        }
+      }
       if (!copy.winner_name && copy.parent_match_id) {
         const parent = byId[copy.parent_match_id];
         if (parent) {
@@ -1516,7 +1541,7 @@ function App({ isCurrentPage = false }) {
   }, [tournamentId]);
 
   // Poll for updates so UI stays in sync (e.g. Discord updates, other users editing)
-  const POLL_INTERVAL_MS = 15000; // 15 seconds
+  const POLL_INTERVAL_MS = activeTab === 'bracket' ? 4000 : 15000; // 4s on bracket tab for smoother round updates
   const TOURNAMENTS_POLL_MS = 30000; // 30 seconds
   useEffect(() => {
     if (!tournamentId) return;
@@ -1525,7 +1550,7 @@ function App({ isCurrentPage = false }) {
       fetchData({ silent: true });
     }, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [tournamentId]);
+  }, [tournamentId, activeTab]);
 
   useEffect(() => {
     const id = setInterval(() => {
