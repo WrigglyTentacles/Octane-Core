@@ -508,6 +508,38 @@ async def advance_round_when_complete(
             await advance_round_when_complete(session, bracket_id, round_num + 1, is_team)
 
 
+async def advance_rounds_until_incomplete(
+    session: AsyncSession, bracket_id: int, start_round: int, is_team: bool
+) -> None:
+    """Advance start_round, then keep advancing subsequent rounds until one is incomplete."""
+    r = start_round
+    while True:
+        await advance_round_when_complete(session, bracket_id, r, is_team)
+        await session.flush()
+        next_result = await session.execute(
+            select(BracketMatch)
+            .where(
+                BracketMatch.bracket_id == bracket_id,
+                BracketMatch.round_num == r + 1,
+                BracketMatch.bracket_section.is_(None),
+            )
+        )
+        next_matches = list(next_result.scalars().all())
+        if not next_matches:
+            break
+        all_complete = True
+        for m in next_matches:
+            entity = _get_winner_entity(m, is_team)
+            if not entity and _match_had_bye(m):
+                entity = _get_entity_from_slot(m, 1, is_team)
+            if not entity:
+                all_complete = False
+                break
+        if not all_complete:
+            break
+        r += 1
+
+
 def _assign_winner_from_entity(m: BracketMatch, entity: Tuple, is_team: bool) -> None:
     """Set winner on match from entity tuple (team_id, True) or (player_id, False, False) or (('manual', id), False, True)."""
     m.winner_team_id = None
@@ -647,7 +679,7 @@ async def swap_slots(
     if is_advancing_to_parent and b.bracket_type == "single_elim":
         _assign_winner_from_entity(from_match, from_entity, is_team)
         await session.flush()
-        await advance_round_when_complete(session, b.id, from_match.round_num, is_team)
+        await advance_rounds_until_incomplete(session, b.id, from_match.round_num, is_team)
 
 
 async def swap_match_winner(

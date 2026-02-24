@@ -1438,8 +1438,17 @@ function App({ isCurrentPage = false }) {
   const [deadlineValue, setDeadlineValue] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuSection, setMenuSection] = useState(null); // null | 'rename' | 'create' | 'deadline'
+  const [menuSection, setMenuSection] = useState(null); // null | 'rename' | 'create' | 'deadline' | 'pollInterval'
   const [showArchived, setShowArchived] = useState(false);
+  const [pollIntervalMs, setPollIntervalMs] = useState(() => {
+    try {
+      const saved = localStorage.getItem(POLL_INTERVAL_STORAGE_KEY);
+      const n = saved ? parseInt(saved, 10) : NaN;
+      return Number.isFinite(n) && n >= 1000 ? n : 4000;
+    } catch {
+      return 4000;
+    }
+  });
   const [discordConfigReady, setDiscordConfigReady] = useState(false);
 
   const fetchTournaments = async (includeArchived = showArchived) => {
@@ -1541,16 +1550,15 @@ function App({ isCurrentPage = false }) {
   }, [tournamentId]);
 
   // Poll for updates so UI stays in sync (e.g. Discord updates, other users editing)
-  const POLL_INTERVAL_MS = activeTab === 'bracket' ? 4000 : 15000; // 4s on bracket tab for smoother round updates
   const TOURNAMENTS_POLL_MS = 30000; // 30 seconds
   useEffect(() => {
     if (!tournamentId) return;
     const id = setInterval(() => {
       if (document.hidden) return; // Pause when tab is in background
       fetchData({ silent: true });
-    }, POLL_INTERVAL_MS);
+    }, pollIntervalMs);
     return () => clearInterval(id);
-  }, [tournamentId, activeTab]);
+  }, [tournamentId, pollIntervalMs]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -2173,6 +2181,9 @@ function App({ isCurrentPage = false }) {
                       <button onClick={() => { fetchData(); setMenuOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}>
                         Refresh
                       </button>
+                      <button onClick={() => setMenuSection('pollInterval')} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="How often to auto-refresh bracket data">
+                        Refresh interval: {POLL_INTERVAL_OPTIONS.find((o) => o.value === pollIntervalMs)?.label ?? `${pollIntervalMs / 1000}s`}
+                      </button>
                       {tournamentId && (
                         <>
                           <button onClick={() => { setMenuSection('rename'); setRenameValue(tournaments.find((t) => t.id === tournamentId)?.name ?? ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}>
@@ -2327,6 +2338,34 @@ function App({ isCurrentPage = false }) {
                         }}>Clear</button>
                         <button onClick={() => { setMenuSection(null); }}>Cancel</button>
                       </div>
+                    </div>
+                  ) : menuSection === 'pollInterval' ? (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Refresh interval</div>
+                      <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>How often to auto-refresh bracket and tournament data.</p>
+                      {POLL_INTERVAL_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.value}
+                          onClick={() => {
+                            setPollIntervalMs(opt.value);
+                            try { localStorage.setItem(POLL_INTERVAL_STORAGE_KEY, String(opt.value)); } catch {}
+                            setMenuSection(null);
+                            setMenuOpen(false);
+                          }}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            textAlign: 'left',
+                            padding: '10px 12px',
+                            marginBottom: 4,
+                            background: pollIntervalMs === opt.value ? 'var(--accent-muted)' : undefined,
+                            border: pollIntervalMs === opt.value ? '1px solid var(--accent)' : '1px solid transparent',
+                          }}
+                        >
+                          {opt.label} {pollIntervalMs === opt.value ? '✓' : ''}
+                        </button>
+                      ))}
+                      <button onClick={() => { setMenuSection(null); }} style={{ marginTop: 8 }}>Back</button>
                     </div>
                   ) : (
                     <div>

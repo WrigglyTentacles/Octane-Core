@@ -1157,7 +1157,7 @@ async def update_match(
     user: User = Depends(require_moderator_user),
 ):
     """Update a bracket match (assign teams/players, set winner). Single elim: advance when round complete (randomize bye, exclude teams that had bye). Double elim: advance immediately. Auto-sets tournament to completed when champion is declared."""
-    from bot.services.bracket_gen import advance_round_when_complete, advance_winner_to_parent
+    from bot.services.bracket_gen import advance_rounds_until_incomplete, advance_winner_to_parent
 
     async with async_session_factory() as session:
         match = await session.get(BracketMatch, match_id)
@@ -1186,7 +1186,7 @@ async def update_match(
             if winner_updated:
                 await session.flush()  # Ensure winner is visible to advancement queries
                 if bracket.bracket_type == "single_elim":
-                    await advance_round_when_complete(session, bracket.id, match.round_num, is_team)
+                    await advance_rounds_until_incomplete(session, bracket.id, match.round_num, is_team)
                 else:
                     await advance_winner_to_parent(session, match, is_team)
                 # Auto-complete tournament when champion is declared (direct or via advancement)

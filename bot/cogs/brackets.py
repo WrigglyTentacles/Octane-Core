@@ -1,7 +1,7 @@
 """Brackets cog - /bracket generate, view, update (Moderator+ for generate/update)."""
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -11,7 +11,7 @@ from discord import app_commands
 from bot.checks import mod_or_higher
 from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamManualMember, Tournament, TournamentManualEntry
 from bot.models.base import get_async_session
-from bot.services.bracket_gen import create_single_elim_bracket
+from bot.services.bracket_gen import advance_rounds_until_incomplete, advance_winner_to_parent, create_single_elim_bracket
 from bot.services.rl_api import RLAPIService
 import config
 
@@ -768,6 +768,19 @@ async def bracket_post(
         return
 
 
+def _champion_match_has_winner(matches_with_winners, bracket_type: str, max_round_single_elim: int | None = None) -> bool:
+    """True if the champion (final) match has a winner set."""
+    if not matches_with_winners:
+        return False
+    if bracket_type == "double_elim":
+        return any(m.bracket_section == "grand_finals" for m in matches_with_winners)
+    single_elim = [m for m in matches_with_winners if m.bracket_section is None]
+    if not single_elim:
+        return False
+    final_round = max_round_single_elim if max_round_single_elim is not None else max(m.round_num for m in single_elim)
+    return any(m.round_num == final_round for m in single_elim)
+
+
 @bracket_group.command(name="update", description="Record match winner (Moderator+)")
 @app_commands.describe(
     match_id="Match ID (from bracket view)",
@@ -802,16 +815,63 @@ async def update(
             await interaction.followup.send("Tournament not found.", ephemeral=True)
             return
         is_team = t.format != "1v1"
+        # Clear other winner fields and set winner
+        match.winner_team_id = None
+        match.winner_player_id = None
+        match.winner_manual_entry_id = None
         if winner_slot == 1:
-            match.winner_team_id = match.team1_id if is_team else None
-            match.winner_player_id = match.player1_id if not is_team else None
+            if is_team:
+                match.winner_team_id = match.team1_id
+            elif match.manual_entry1_id:
+                match.winner_manual_entry_id = match.manual_entry1_id
+            else:
+                match.winner_player_id = match.player1_id
         else:
-            match.winner_team_id = match.team2_id if is_team else None
-            match.winner_player_id = match.player2_id if not is_team else None
+            if is_team:
+                match.winner_team_id = match.team2_id
+            elif match.manual_entry2_id:
+                match.winner_manual_entry_id = match.manual_entry2_id
+            else:
+                match.winner_player_id = match.player2_id
+        await session.flush()
+        # Advance winners to next round (same logic as web API)
+        if bracket.bracket_type == "single_elim":
+            await advance_rounds_until_incomplete(session, bracket.id, match.round_num, is_team)
+        else:
+            await advance_winner_to_parent(session, match, is_team)
+        # Auto-complete tournament when champion is declared
+        champ_result = await session.execute(
+            select(BracketMatch)
+            .where(BracketMatch.bracket_id == bracket.id)
+            .where(
+                or_(
+                    BracketMatch.winner_team_id != None,  # noqa: E711
+                    BracketMatch.winner_player_id != None,  # noqa: E711
+                    BracketMatch.winner_manual_entry_id != None,  # noqa: E711
+                )
+            )
+        )
+        champ_matches = champ_result.scalars().all()
+        max_round = None
+        if bracket.bracket_type == "single_elim":
+            max_r = await session.execute(
+                select(func.max(BracketMatch.round_num)).where(
+                    BracketMatch.bracket_id == bracket.id,
+                    BracketMatch.bracket_section.is_(None),
+                )
+            )
+            max_round = max_r.scalar() or 0
+        if _champion_match_has_winner(champ_matches, bracket.bracket_type, max_round):
+            t.status = "completed"
         await session.commit()
-        winner_id = match.winner_team_id or match.winner_player_id
-        winner_name = await resolve_entity(
-            session, winner_id, is_team, interaction.guild, interaction.client
-        ) if winner_id else "—"
+        if match.winner_team_id:
+            winner_name = await resolve_entity(session, match.winner_team_id, True, interaction.guild, interaction.client)
+        elif match.winner_player_id:
+            winner_name = await resolve_entity(session, match.winner_player_id, False, interaction.guild, interaction.client)
+        elif match.winner_manual_entry_id:
+            entry = await session.get(TournamentManualEntry, match.winner_manual_entry_id)
+            winner_name = entry.display_name if entry else "—"
+        else:
+            winner_name = "—"
         await interaction.followup.send(f"Recorded winner: **{winner_name}**", ephemeral=True)
         return
