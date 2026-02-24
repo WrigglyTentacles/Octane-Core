@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from bot.models import User
 from web.auth import require_moderator_user
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -786,6 +786,30 @@ async def list_winners():
         return winners
 
 
+@router.get("/tournaments/current")
+async def get_current_tournament():
+    """Get the latest active (open or in_progress) non-archived tournament. Public, no auth required. Reopened tournaments qualify as current."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Tournament)
+            .where(Tournament.archived == False)  # noqa: E712
+            .where(Tournament.status.in_(["open", "in_progress"]))
+            .order_by(Tournament.id.desc())
+            .limit(1)
+        )
+        t = result.scalar_one_or_none()
+        if not t:
+            return None
+        return {
+            "id": t.id,
+            "name": t.name,
+            "format": t.format,
+            "status": t.status,
+            "archived": t.archived,
+            "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+        }
+
+
 @router.get("/tournaments")
 async def list_tournaments(include_archived: bool = False):
     """List tournaments. By default excludes archived. Use ?include_archived=1 to include them."""
@@ -1105,8 +1129,10 @@ async def swap_match_winner_route(
         return {"ok": True}
 
 
-def _champion_match_has_winner(matches_with_winners: list, bracket_type: str) -> bool:
-    """True if the champion (final) match among these has a winner set."""
+def _champion_match_has_winner(
+    matches_with_winners: list, bracket_type: str, max_round_single_elim: int | None = None
+) -> bool:
+    """True if the champion (final) match has a winner set. For single elim, max_round_single_elim must be the actual final round in the bracket (not just the max among matches with winners)."""
     if not matches_with_winners:
         return False
     if bracket_type == "double_elim":
@@ -1114,12 +1140,13 @@ def _champion_match_has_winner(matches_with_winners: list, bracket_type: str) ->
             if m.bracket_section == "grand_finals":
                 return True
         return False
-    # Single elim: final has highest round_num among matches with bracket_section None
+    # Single elim: the actual final (highest round in bracket) must have a winner
     single_elim_matches = [m for m in matches_with_winners if m.bracket_section is None]
     if not single_elim_matches:
         return False
-    max_round = max(m.round_num for m in single_elim_matches)
-    return any(m.round_num == max_round for m in single_elim_matches)
+    # Use provided max round (from full bracket) so we don't mark complete when only round 1 is done
+    final_round = max_round_single_elim if max_round_single_elim is not None else max(m.round_num for m in single_elim_matches)
+    return any(m.round_num == final_round for m in single_elim_matches)
 
 
 @router.patch("/tournaments/{tournament_id}/bracket/matches/{match_id}")
@@ -1175,7 +1202,16 @@ async def update_match(
                     )
                 )
                 champ_matches = champ_matches_result.scalars().all()
-                if _champion_match_has_winner(champ_matches, bracket.bracket_type):
+                max_round = None
+                if bracket.bracket_type == "single_elim":
+                    max_r = await session.execute(
+                        select(func.max(BracketMatch.round_num)).where(
+                            BracketMatch.bracket_id == bracket.id,
+                            BracketMatch.bracket_section.is_(None),
+                        )
+                    )
+                    max_round = max_r.scalar() or 0
+                if _champion_match_has_winner(champ_matches, bracket.bracket_type, max_round):
                     t.status = "completed"
             await session.commit()
         except Exception as e:

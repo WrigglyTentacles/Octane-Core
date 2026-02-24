@@ -1018,7 +1018,12 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwap
         {roundEntries.map(([roundNum, matches]) => (
           <div key={roundNum} style={{ display: 'flex', flexDirection: 'column', gap: matchGap, alignItems: 'flex-start' }}>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>Round {roundNum}</div>
-            {matches.map((m) => m && renderMatchBlock(m, roundNum))}
+            {matches.map((m) => m && (
+              <div key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 24, paddingTop: 8 }}>M{m.match_num}</span>
+                {renderMatchBlock(m, roundNum)}
+              </div>
+            ))}
           </div>
         ))}
       </div>
@@ -1072,14 +1077,17 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
           minHeight: rowSpan * 52,
         }}
       >
-        <div
-          style={{
-            ...styles.card,
-            padding: 12,
-            border: '1px solid var(--border)',
-            position: 'relative',
-          }}
-        >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 22, paddingTop: 12 }}>M{m.match_num}</span>
+          <div
+            style={{
+              ...styles.card,
+              padding: 12,
+              border: '1px solid var(--border)',
+              position: 'relative',
+              flex: 1,
+            }}
+          >
           {isEditable ? (
             <>
               <MatchSlot label="Slot 1" name={s1} matchId={m.id} slot={1} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} teamId={m.team1_id} teams={teams} isTeam={isTeam} />
@@ -1115,6 +1123,7 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
               )}
             </div>
           )}
+          </div>
         </div>
       </div>
     );
@@ -1225,8 +1234,10 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
           const s2 = m.team2_name || m.player2_name || 'TBD';
           const hasOpponent = (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id);
           return (
-            <div key={m.id} style={{ ...styles.card, padding: 16 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 24, paddingTop: 16 }}>M{m.match_num}</span>
+              <div style={{ ...styles.card, padding: 16, flex: 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {isPreview ? (
                   <>
                     <div style={{ padding: 14, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', color: s1 && s1 !== 'TBD' ? 'var(--text-primary)' : 'var(--text-muted)' }}>
@@ -1289,6 +1300,7 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
                     </div>
                   )
                 )}
+                </div>
               </div>
             </div>
           );
@@ -1363,8 +1375,9 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
   );
 }
 
-function App() {
+function App({ isCurrentPage = false }) {
   const { canEdit, authFetch, user, logout, isAdmin, loading: authLoading } = useAuth();
+  const effectiveCanEdit = isCurrentPage ? false : canEdit;
   const location = useLocation();
   const navigate = useNavigate();
   const [siteTitle, setSiteTitle] = useState('Octane Bracket Manager');
@@ -1406,6 +1419,14 @@ function App() {
 
   const fetchTournaments = async (includeArchived = showArchived) => {
     try {
+      if (isCurrentPage) {
+        const res = await fetch(`${API}/tournaments/current`);
+        const data = await parseJson(res);
+        const list = data ? [data] : [];
+        setTournaments(list);
+        if (list.length) setTournamentId(list[0].id);
+        return list;
+      }
       const res = await authFetch(`${API}/tournaments${includeArchived ? '?include_archived=1' : ''}`);
       const data = await parseJson(res);
       const list = Array.isArray(data) ? data : [];
@@ -1480,10 +1501,11 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (isCurrentPage) return; // Public page, no login required
     if (!authLoading && !user) {
       navigate('/login', { replace: true, state: { from: location } });
     }
-  }, [authLoading, user, navigate, location]);
+  }, [authLoading, user, navigate, location, isCurrentPage]);
 
   useEffect(() => {
     fetchTournaments();
@@ -1520,14 +1542,20 @@ function App() {
       navigate('/', { replace: true });
       return;
     }
-    const tabFromPath = path === '/' ? 'players' : path.slice(1);
+    let tabFromPath;
+    if (path.startsWith('/current')) {
+      tabFromPath = (path === '/current' || path === '/current/') ? 'players' : (path.split('/').pop() || 'players');
+    } else {
+      tabFromPath = path === '/' ? 'players' : path.slice(1);
+    }
     const validTabs = ['players', 'teams', 'bracket'];
+    const onCurrentPage = path.startsWith('/current');
     if (validTabs.includes(tabFromPath)) {
       const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
       const isTeamFormat = fmt && fmt !== '1v1';
       const knowFormat = tournaments.length && tournamentId && fmt;
       if (tabFromPath === 'teams' && knowFormat && !isTeamFormat) {
-        navigate('/', { replace: true });
+        navigate(onCurrentPage ? '/current' : '/', { replace: true });
       } else {
         setActiveTab(tabFromPath);
         try {
@@ -1556,9 +1584,10 @@ function App() {
     const hasBracket = bracket && Object.keys(bracket.rounds || {}).length > 0;
     const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
     const hasData = fmt === '1v1' ? participants.length >= 2 : teams.length >= 2;
-    if (activeTab === 'bracket' && !hasBracket && hasData) fetchPreview();
-    else setPreviewBracket(null);
-  }, [activeTab, tournamentId, bracket, bracketType, participants.length, teams.length, tournaments]);
+    const shouldFetchPreview = (activeTab === 'bracket' || isCurrentPage) && !hasBracket && hasData;
+    if (shouldFetchPreview) fetchPreview();
+    else if (!isCurrentPage) setPreviewBracket(null);
+  }, [activeTab, tournamentId, bracket, bracketType, participants.length, teams.length, tournaments, isCurrentPage]);
 
   const addParticipant = async (displayName) => {
     try {
@@ -1987,7 +2016,7 @@ function App() {
     }
   };
 
-  if (!authLoading && !user) {
+  if (!isCurrentPage && !authLoading && !user) {
     return null;
   }
 
@@ -2000,6 +2029,11 @@ function App() {
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           <>
             <Link to="/winners" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Winners</Link>
+            {isCurrentPage ? (
+              <Link to="/" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Back to brackets</Link>
+            ) : (
+              <Link to="/current" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Current tournament</Link>
+            )}
             {user ? (
               <>
                 <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>{user.username} ({user.role})</span>
@@ -2017,6 +2051,23 @@ function App() {
         </div>
       </div>
       <div style={{ marginBottom: 24, display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center', position: 'relative' }}>
+        {isCurrentPage && tournamentId && (() => {
+          const t = tournaments.find((x) => x.id === tournamentId);
+          if (!t) return null;
+          const statusConfig = { open: { label: 'Open', color: 'var(--success)', bg: 'rgba(34,197,94,0.15)' }, completed: { label: 'Completed', color: '#eab308', bg: 'rgba(234,179,8,0.15)' }, closed: { label: 'Closed', color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' }, in_progress: { label: 'In progress', color: 'var(--accent)', bg: 'var(--accent-muted)' } };
+          const cfg = statusConfig[t.status] || { label: t.status, color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' };
+          return (
+            <>
+              <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>{t.name}</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 6 }}>ID: {t.id}</span>
+              <span style={{ fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 20, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.color}40` }}>
+                {cfg.label}
+              </span>
+            </>
+          );
+        })()}
+        {!isCurrentPage && (
+          <>
         <label style={{ color: 'var(--text-secondary)' }}>Tournament:</label>
         <select
           value={tournamentId ?? ''}
@@ -2025,7 +2076,7 @@ function App() {
         >
           <option value="">Select...</option>
           {tournaments.map((t) => (
-            <option key={t.id} value={t.id}>{t.name} ({t.format}) — {t.status === 'open' ? 'Open' : t.status === 'completed' ? 'Completed' : t.status === 'closed' ? 'Closed' : t.status} {t.archived ? '· archived' : ''}</option>
+            <option key={t.id} value={t.id}>[{t.id}] {t.name} ({t.format}) — {t.status === 'open' ? 'Open' : t.status === 'completed' ? 'Completed' : t.status === 'closed' ? 'Closed' : t.status} {t.archived ? '· archived' : ''}</option>
           ))}
         </select>
         {tournamentId && (() => {
@@ -2034,16 +2085,19 @@ function App() {
           const statusConfig = { open: { label: 'Open', color: 'var(--success)', bg: 'rgba(34,197,94,0.15)' }, completed: { label: 'Completed', color: '#eab308', bg: 'rgba(234,179,8,0.15)' }, closed: { label: 'Closed', color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' }, in_progress: { label: 'In progress', color: 'var(--accent)', bg: 'var(--accent-muted)' } };
           const cfg = statusConfig[t.status] || { label: t.status, color: 'var(--text-muted)', bg: 'rgba(113,113,122,0.15)' };
           return (
-            <span style={{ fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 20, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.color}40` }}>
-              {cfg.label}
-            </span>
+            <>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>ID: {t.id}</span>
+              <span style={{ fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 20, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.color}40` }}>
+                {cfg.label}
+              </span>
+            </>
           );
         })()}
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 14, color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showArchived} onChange={(e) => { setShowArchived(e.target.checked); fetchTournaments(e.target.checked); }} />
           Show archived
         </label>
-        {canEdit && (
+        {effectiveCanEdit && (
           <div style={{ position: 'relative' }}>
             <button
               onClick={() => setMenuOpen((o) => !o)}
@@ -2317,6 +2371,8 @@ function App() {
             )}
           </div>
         )}
+          </>
+        )}
       </div>
       {error && (
         <div style={{ padding: 14, marginBottom: 20, background: 'rgba(239,68,68,0.15)', border: '1px solid var(--error)', borderRadius: 'var(--radius-sm)', color: 'var(--error)' }}>
@@ -2326,9 +2382,12 @@ function App() {
       {loading && (
         <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
       )}
+      {isCurrentPage && !loading && !tournamentId && (
+        <p style={{ color: 'var(--text-muted)', marginTop: 24 }}>No current tournament. <Link to="/winners" style={{ color: 'var(--accent)' }}>View past winners</Link></p>
+      )}
       {tournamentId && !loading && (
         <>
-          {(() => {
+          {!isCurrentPage && (() => {
             const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
             const isTeamFormat = fmt && fmt !== '1v1';
             const tabs = ['players', ...(isTeamFormat ? ['teams'] : []), 'bracket'];
@@ -2352,7 +2411,7 @@ function App() {
               </div>
             );
           })()}
-          {activeTab === 'players' && (
+          {!isCurrentPage && activeTab === 'players' && (
             <ParticipantsAndStandbyView
               participants={participants}
               standby={standby}
@@ -2368,7 +2427,7 @@ function App() {
               readOnly={!canEdit}
             />
           )}
-          {activeTab === 'teams' && (
+          {!isCurrentPage && activeTab === 'teams' && (
             <TeamsView
               teams={teams}
               participants={participants}
@@ -2380,10 +2439,25 @@ function App() {
               readOnly={!canEdit}
             />
           )}
-          {activeTab === 'bracket' && (() => {
+          {(isCurrentPage || activeTab === 'bracket') && (() => {
             const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
             const bracketCount = fmt === '1v1' ? participants.length : (teams?.length ?? 0);
             const generateDisabled = !bracketCount || (bracketType === 'double_elim' && bracketCount < 8);
+            const hasBracket = bracket && Object.keys(bracket.rounds || {}).length > 0;
+            const hasPreview = previewBracket && Object.keys(previewBracket.rounds || {}).length > 0;
+            if (isCurrentPage) {
+              return (
+                <div>
+                  {hasBracket ? (
+                    <BracketView bracket={bracket} tournament={bracket.tournament} teams={teams} participants={participants} standby={standby} isPreview canEdit={false} />
+                  ) : hasPreview ? (
+                    <BracketView bracket={previewBracket} tournament={previewBracket.tournament} teams={teams} participants={participants} standby={standby} isPreview canEdit={false} />
+                  ) : (
+                    <p style={{ color: 'var(--text-muted)' }}>Bracket not yet available.</p>
+                  )}
+                </div>
+              );
+            }
             return (
             <div>
               {bracket?.error ? (
@@ -2401,14 +2475,14 @@ function App() {
                       Generate Bracket
                     </button>}
                   </div>
-                  {previewBracket && Object.keys(previewBracket.rounds || {}).length > 0 && (
+                  {hasPreview && (
                     <div style={{ marginTop: 24 }}>
                       <h3 style={{ margin: '0 0 12px', color: 'var(--text-secondary)' }}>Preview</h3>
                       <BracketView bracket={previewBracket} tournament={previewBracket.tournament} teams={teams} participants={participants} standby={standby} isPreview canEdit={false} />
                     </div>
                   )}
                 </div>
-              ) : bracket && Object.keys(bracket.rounds || {}).length > 0 ? (
+              ) : hasBracket ? (
                 <div>
                   {canEdit && (
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
@@ -2417,9 +2491,9 @@ function App() {
                       </button>
                     </div>
                   )}
-                  <BracketView bracket={bracket} tournament={bracket.tournament} teams={teams} participants={participants} standby={standby} onUpdateMatch={updateMatch} onAdvanceOpponent={advanceOpponent} onSetWinner={setWinner} onSwapWinner={swapWinner} onClearWinner={clearWinner} onSwapSlots={swapSlots} canEdit={canEdit} />
+                  <BracketView bracket={bracket} tournament={bracket.tournament} teams={teams} participants={participants} standby={standby} onUpdateMatch={updateMatch} onAdvanceOpponent={advanceOpponent} onSetWinner={setWinner} onSwapWinner={swapWinner} onClearWinner={clearWinner} onSwapSlots={swapSlots} canEdit={effectiveCanEdit} />
                 </div>
-              ) : previewBracket && Object.keys(previewBracket.rounds || {}).length > 0 ? (
+              ) : hasPreview ? (
                 <div>
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
                     <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>Preview</span>

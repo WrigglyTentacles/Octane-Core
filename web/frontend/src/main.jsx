@@ -14,6 +14,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <AuthProvider>
         <Routes>
           <Route path="/" element={<App />} />
+          <Route path="/current/*" element={<App isCurrentPage />} />
           <Route path="/winners" element={<WinnersPage />} />
           <Route path="/participants" element={<App />} />
           <Route path="/standby" element={<App />} />
