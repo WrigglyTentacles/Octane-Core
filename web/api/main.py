@@ -15,6 +15,7 @@ from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamMa
 from bot.models.base import async_session_factory, init_db
 
 from web.api.routes import router as api_router
+from web.api.utils import player_display_name
 from web.api.auth_routes import router as auth_router
 from web.api.settings_routes import router as settings_router
 
@@ -81,6 +82,12 @@ async def get_bracket(tournament_id: int):
             r = m.round_num
             if r not in rounds:
                 rounds[r] = []
+            # Return Discord player IDs as strings so JS preserves precision (snowflakes > 2^53)
+            def _id_for_json(v):
+                if v is None:
+                    return None
+                return str(v) if v > 9007199254740991 else v
+
             match_data = {
                 "id": m.id,
                 "match_num": m.match_num,
@@ -90,12 +97,12 @@ async def get_bracket(tournament_id: int):
                 "parent_match_slot": m.parent_match_slot,
                 "team1_id": m.team1_id,
                 "team2_id": m.team2_id,
-                "player1_id": m.player1_id,
-                "player2_id": m.player2_id,
+                "player1_id": _id_for_json(m.player1_id),
+                "player2_id": _id_for_json(m.player2_id),
                 "manual_entry1_id": m.manual_entry1_id,
                 "manual_entry2_id": m.manual_entry2_id,
                 "winner_team_id": m.winner_team_id,
-                "winner_player_id": m.winner_player_id,
+                "winner_player_id": _id_for_json(m.winner_player_id),
                 "winner_manual_entry_id": m.winner_manual_entry_id,
             }
             if is_team and m.team1_id:
@@ -108,12 +115,10 @@ async def get_bracket(tournament_id: int):
                     match_data["team2_name"] = team.name
             if not is_team and m.player1_id:
                 player = await session.get(Player, m.player1_id)
-                if player:
-                    match_data["player1_name"] = player.display_name or str(player.discord_id)
+                match_data["player1_name"] = player_display_name(player, m.player1_id)
             if not is_team and m.player2_id:
                 player = await session.get(Player, m.player2_id)
-                if player:
-                    match_data["player2_name"] = player.display_name or str(player.discord_id)
+                match_data["player2_name"] = player_display_name(player, m.player2_id)
             if not is_team and m.manual_entry1_id:
                 entry = await session.get(TournamentManualEntry, m.manual_entry1_id)
                 if entry:
@@ -131,8 +136,7 @@ async def get_bracket(tournament_id: int):
                     match_data["winner_name"] = team.name
             elif m.winner_player_id:
                 player = await session.get(Player, m.winner_player_id)
-                if player:
-                    match_data["winner_name"] = player.display_name or str(player.discord_id)
+                match_data["winner_name"] = player_display_name(player, m.winner_player_id)
             elif m.winner_manual_entry_id:
                 entry = await session.get(TournamentManualEntry, m.winner_manual_entry_id)
                 if entry:
@@ -186,7 +190,7 @@ async def get_bracket_preview(tournament_id: int, bracket_type: str = "single_el
                 .options(selectinload(Registration.player))
             )
             for reg in regs_result.scalars().all():
-                names.append(reg.player.display_name or str(reg.player_id))
+                names.append(player_display_name(reg.player, reg.player_id))
         if len(names) < 2:
             return {"error": "Add at least 2 participants or teams", "rounds": {}}
         preview = preview_bracket_structure(names, bracket_type)

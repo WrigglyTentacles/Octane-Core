@@ -634,8 +634,10 @@ function TeamsView({ teams, participants, standby, onUpdateTeams, onSubstitute, 
     } else if (overId.startsWith('player-')) {
       const targetId = overId.replace('player-', '');
       if (_sameId(targetId, entryId)) return;
-      const person = allPeople.find((p) => _sameId(p.id, entryId));
-      const targetPerson = allPeople.find((p) => _sameId(p.id, targetId));
+      const getMember = (id) =>
+        allPeople.find((p) => _sameId(p.id, id)) ?? teams.flatMap((t) => t.members).find((m) => _sameId(m.id, id));
+      const person = getMember(entryId);
+      const targetPerson = getMember(targetId);
       if (!person || !targetPerson) return;
       const currentTeam = teams.find((t) => t.members.some((m) => _sameId(m.id, entryId)));
       const targetTeam = teams.find((t) => t.members.some((m) => _sameId(m.id, targetId)));
@@ -659,7 +661,9 @@ function TeamsView({ teams, participants, standby, onUpdateTeams, onSubstitute, 
       const targetTeam = teams.find((t) => String(t.id) === teamId);
       if (!targetTeam || targetTeam.members.length >= maxPerTeam) return;
       const currentTeam = teams.find((t) => t.members.some((m) => _sameId(m.id, entryId)));
-      const person = allPeople.find((p) => _sameId(p.id, entryId));
+      const person =
+        allPeople.find((p) => _sameId(p.id, entryId)) ??
+        currentTeam?.members.find((m) => _sameId(m.id, entryId));
       if (!person) return;
       let newTeams;
       if (currentTeam) {
@@ -1678,9 +1682,14 @@ function App() {
   const updateMatch = async (matchId, slot, entity) => {
     if (!entity) return;
     let body;
+    const isDiscordId = typeof entity.id === 'string' && entity.id.startsWith('discord:');
     if (entity.type === 'team') {
       body = slot === 1 ? { team1_id: entity.id } : { team2_id: entity.id };
-    } else if (entity.type === 'manual_entry') {
+    } else if (entity.type === 'player' || isDiscordId) {
+      const playerId = isDiscordId ? parseInt(entity.id.replace('discord:', ''), 10) : entity.id;
+      if (!Number.isFinite(playerId)) return;
+      body = slot === 1 ? { player1_id: playerId } : { player2_id: playerId };
+    } else if (entity.type === 'manual_entry' && !isDiscordId) {
       body = slot === 1 ? { manual_entry1_id: entity.id } : { manual_entry2_id: entity.id };
     } else return;
     try {
@@ -1751,8 +1760,13 @@ function App() {
     const winnerId = isTeam
       ? (slot === 1 ? m.team1_id : m.team2_id)
       : (slot === 1 ? (m.manual_entry1_id ?? m.player1_id) : (m.manual_entry2_id ?? m.player2_id));
-    if (!winnerId) return;
-    const body = isTeam ? { winner_team_id: winnerId } : (m.manual_entry1_id != null || m.manual_entry2_id != null ? { winner_manual_entry_id: winnerId } : { winner_player_id: winnerId });
+    if (winnerId == null) return;
+    // Send Discord player IDs as string to avoid JS number precision loss (snowflakes > 2^53)
+    const idForPayload = (id) => (typeof id === 'number' && id > 9007199254740991 ? String(id) : id);
+    const body = isTeam
+      ? { winner_team_id: winnerId }
+      : (slot === 1 ? (m.manual_entry1_id != null ? { winner_manual_entry_id: winnerId } : { winner_player_id: idForPayload(winnerId) })
+        : (m.manual_entry2_id != null ? { winner_manual_entry_id: winnerId } : { winner_player_id: idForPayload(winnerId) }));
     try {
       const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/${matchId}`, {
         method: 'PATCH',
@@ -1783,8 +1797,12 @@ function App() {
     const winnerId = isTeam
       ? (opponentSlot === 1 ? m.team1_id : m.team2_id)
       : (opponentSlot === 1 ? (m.manual_entry1_id ?? m.player1_id) : (m.manual_entry2_id ?? m.player2_id));
-    if (!winnerId) return;
-    const body = isTeam ? { winner_team_id: winnerId } : (m.manual_entry1_id != null || m.manual_entry2_id != null ? { winner_manual_entry_id: winnerId } : { winner_player_id: winnerId });
+    if (winnerId == null) return;
+    const idForPayload = (id) => (typeof id === 'number' && id > 9007199254740991 ? String(id) : id);
+    const body = isTeam
+      ? { winner_team_id: winnerId }
+      : (opponentSlot === 1 ? (m.manual_entry1_id != null ? { winner_manual_entry_id: winnerId } : { winner_player_id: idForPayload(winnerId) })
+        : (m.manual_entry2_id != null ? { winner_manual_entry_id: winnerId } : { winner_player_id: idForPayload(winnerId) }));
     if (slot === 1) {
       if (isTeam) body.team1_id = null; else body[m.manual_entry1_id != null ? 'manual_entry1_id' : 'player1_id'] = null;
     } else {
@@ -1922,7 +1940,7 @@ function App() {
       const body = {
         teams: teamsData.map((t) => ({
           name: t.name,
-          member_ids: t.members.map((m) => m.id),
+          member_ids: t.members.map((m) => m.id).filter((id) => id != null && id !== ''),
         })),
       };
       const res = await authFetch(`${API}/tournaments/${tournamentId}/teams`, {

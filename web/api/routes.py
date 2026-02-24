@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 import config
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from bot.models import User
 from web.auth import require_moderator_user
@@ -29,6 +29,8 @@ from bot.models import (
     TournamentManualEntry,
 )
 from bot.models.base import async_session_factory
+
+from web.api.utils import player_display_name
 from bot.models.tournament import parse_format_players
 
 router = APIRouter(prefix="/api", tags=["tournaments"])
@@ -71,6 +73,20 @@ class ManualEntryMove(BaseModel):
     list_type: str  # "participant" | "standby"
 
 
+def _coerce_id(v):
+    """Coerce int or str to int (handles Discord IDs sent as string for JS precision)."""
+    if v is None:
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        try:
+            return int(v)
+        except ValueError:
+            return None
+    return None
+
+
 class BracketMatchUpdate(BaseModel):
     team1_id: Optional[int] = None
     team2_id: Optional[int] = None
@@ -81,6 +97,11 @@ class BracketMatchUpdate(BaseModel):
     winner_team_id: Optional[int] = None
     winner_player_id: Optional[int] = None
     winner_manual_entry_id: Optional[int] = None
+
+    @field_validator("player1_id", "player2_id", "winner_player_id", mode="before")
+    @classmethod
+    def coerce_player_id(cls, v):
+        return _coerce_id(v)
 
 
 class GenerateBracketRequest(BaseModel):
@@ -378,6 +399,7 @@ async def update_teams(tournament_id: int, body: TeamsBulkUpdate, user: User = D
         for team_data in body.teams:
             if len(team_data.member_ids) > players_per_team:
                 raise HTTPException(400, f"Team '{team_data.name}' has too many members for {t.format}")
+        await session.execute(update(Registration).where(Registration.tournament_id == tournament_id).values(team_id=None))
         existing_teams = await session.execute(select(Team).where(Team.tournament_id == tournament_id))
         for team in existing_teams.scalars().all():
             await session.delete(team)
@@ -392,6 +414,8 @@ async def update_teams(tournament_id: int, body: TeamsBulkUpdate, user: User = D
             session.add(team)
             await session.flush()
             for i, member_ref in enumerate(team_data.member_ids):
+                if member_ref is None:
+                    continue
                 if isinstance(member_ref, str) and member_ref.startswith("discord:"):
                     try:
                         player_id = int(member_ref.replace("discord:", ""))
@@ -441,7 +465,7 @@ async def list_teams(tournament_id: int):
                 for m in sorted(team.manual_members, key=lambda x: x.sort_order)
             ]
             discord = [
-                {"id": f"discord:{r.player_id}", "display_name": (r.player.display_name or f"Player {r.player_id}")}
+                {"id": f"discord:{r.player_id}", "display_name": player_display_name(r.player, r.player_id)}
                 for r in team.members
             ]
             members_by_team[team.id] = manual + discord
@@ -648,7 +672,7 @@ async def list_winners():
                     player_names = []
                     for reg in team.members:
                         if reg.player:
-                            player_names.append(reg.player.display_name or str(reg.player.discord_id))
+                            player_names.append(player_display_name(reg.player, reg.player_id))
                     for tmm in sorted(team.manual_members, key=lambda x: x.sort_order):
                         if tmm.manual_entry:
                             player_names.append(tmm.manual_entry.display_name)
@@ -656,7 +680,7 @@ async def list_winners():
                         winner_players = player_names
             elif champ_match.winner_player_id:
                 player = await session.get(Player, champ_match.winner_player_id)
-                winner_name = player.display_name or str(player.discord_id) if player else None
+                winner_name = player_display_name(player, champ_match.winner_player_id) if player else None
             elif champ_match.winner_manual_entry_id:
                 entry = await session.get(TournamentManualEntry, champ_match.winner_manual_entry_id)
                 winner_name = entry.display_name if entry else None
@@ -1032,6 +1056,14 @@ async def update_match(
         # Use exclude_unset to allow explicit null (e.g. clear slot when team drops out)
         updates = body.model_dump(exclude_unset=True)
         winner_updated = any(k in updates for k in ("winner_team_id", "winner_player_id", "winner_manual_entry_id"))
+        if winner_updated:
+            # When setting a winner, clear the other winner fields to avoid conflicting data
+            if "winner_team_id" not in updates:
+                match.winner_team_id = None
+            if "winner_player_id" not in updates:
+                match.winner_player_id = None
+            if "winner_manual_entry_id" not in updates:
+                match.winner_manual_entry_id = None
         for key, value in updates.items():
             if hasattr(match, key):
                 setattr(match, key, value)
