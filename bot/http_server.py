@@ -9,7 +9,7 @@ import discord
 from sqlalchemy import delete as sql_delete, select
 
 import config
-from bot.models import Player, Registration, Tournament, TournamentSignupMessage
+from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamManualMember, Tournament, TournamentManualEntry, TournamentSignupMessage
 
 logger = logging.getLogger("octane.http")
 
@@ -180,6 +180,7 @@ def create_app(bot) -> aiohttp.web.Application:
     app = aiohttp.web.Application()
     app["bot"] = bot
     app.router.add_post("/internal/post-signup", _handle_post_signup)
+    app.router.add_post("/internal/post-results", _handle_post_results)
     app.router.add_post("/internal/refresh-players", _handle_refresh_players)
     return app
 

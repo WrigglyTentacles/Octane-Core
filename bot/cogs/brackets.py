@@ -781,6 +781,73 @@ def _champion_match_has_winner(matches_with_winners, bracket_type: str, max_roun
     return any(m.round_num == final_round for m in single_elim)
 
 
+async def _get_champion_info(session, bracket, is_team, guild=None, client=None):
+    """Get champion name and optional member list from the bracket. Returns (name, members_list or None)."""
+    result = await session.execute(
+        select(BracketMatch)
+        .where(BracketMatch.bracket_id == bracket.id)
+        .where(
+            or_(
+                BracketMatch.winner_team_id != None,  # noqa: E711
+                BracketMatch.winner_player_id != None,  # noqa: E711
+                BracketMatch.winner_manual_entry_id != None,  # noqa: E711
+            )
+        )
+    )
+    champ_matches = result.scalars().all()
+    champ_match = None
+    for m in champ_matches:
+        if m.bracket_section == "grand_finals":
+            champ_match = m
+            break
+    if not champ_match and champ_matches:
+        champ_match = max(champ_matches, key=lambda x: (x.round_num, x.match_num))
+    if not champ_match:
+        return None, None
+    if champ_match.winner_team_id:
+        team_result = await session.execute(
+            select(Team)
+            .where(Team.id == champ_match.winner_team_id)
+            .options(
+                selectinload(Team.members).selectinload(Registration.player),
+                selectinload(Team.manual_members).selectinload(TeamManualMember.manual_entry),
+            )
+        )
+        team = team_result.scalar_one_or_none()
+        if team:
+            name = team.name
+            members = []
+            for reg in team.members:
+                if reg.player:
+                    members.append(await resolve_entity(session, reg.player_id, False, guild, client))
+            for tmm in sorted(team.manual_members, key=lambda x: x.sort_order):
+                if tmm.manual_entry:
+                    members.append(tmm.manual_entry.display_name)
+            return name, members if members else None
+    elif champ_match.winner_player_id:
+        name = await resolve_entity(session, champ_match.winner_player_id, False, guild, client)
+        return name, None
+    elif champ_match.winner_manual_entry_id:
+        entry = await session.get(TournamentManualEntry, champ_match.winner_manual_entry_id)
+        return (entry.display_name if entry else "—"), None
+    return None, None
+
+
+def _build_results_embed(t, champion_name, champion_members=None):
+    """Build Discord embed for tournament results."""
+    embed = discord.Embed(
+        title=f"🏆 Tournament Complete — {t.name}",
+        description=f"**{t.format}** • Champion declared",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(name="👑 Champion", value=champion_name or "—", inline=False)
+    if champion_members:
+        embed.add_field(name="Roster", value=", ".join(champion_members), inline=False)
+    embed.set_footer(text=f"Tournament ID: {t.id}")
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
 @bracket_group.command(name="update", description="Record match winner (Moderator+)")
 @app_commands.describe(
     match_id="Match ID (from bracket view)",
@@ -861,9 +928,23 @@ async def update(
                 )
             )
             max_round = max_r.scalar() or 0
-        if _champion_match_has_winner(champ_matches, bracket.bracket_type, max_round):
+        champion_declared = _champion_match_has_winner(champ_matches, bracket.bracket_type, max_round)
+        if champion_declared:
             t.status = "completed"
         await session.commit()
+        # Post tournament results when champion is declared
+        if champion_declared and interaction.channel and isinstance(interaction.channel, discord.TextChannel):
+            try:
+                champ_name, champ_members = await _get_champion_info(
+                    session, bracket, is_team, interaction.guild, interaction.client
+                )
+                if champ_name:
+                    embed = _build_results_embed(t, champ_name, champ_members)
+                    await interaction.channel.send(embed=embed)
+            except discord.Forbidden:
+                pass  # No permission to post; don't fail the command
+            except Exception:
+                pass  # Don't fail the command if results post fails
         if match.winner_team_id:
             winner_name = await resolve_entity(session, match.winner_team_id, True, interaction.guild, interaction.client)
         elif match.winner_player_id:

@@ -1182,6 +1182,7 @@ async def update_match(
         for key, value in updates.items():
             if hasattr(match, key):
                 setattr(match, key, value)
+        champion_declared = False
         try:
             if winner_updated:
                 await session.flush()  # Ensure winner is visible to advancement queries
@@ -1211,9 +1212,44 @@ async def update_match(
                         )
                     )
                     max_round = max_r.scalar() or 0
-                if _champion_match_has_winner(champ_matches, bracket.bracket_type, max_round):
+                champion_declared = _champion_match_has_winner(champ_matches, bracket.bracket_type, max_round)
+                if champion_declared:
                     t.status = "completed"
             await session.commit()
+            # Post results to Discord when champion declared from web (if Discord configured)
+            if champion_declared and config.INTERNAL_API_SECRET and config.BOT_INTERNAL_URL:
+                guild_id = t.guild_id if t.guild_id else None
+                if not guild_id:
+                    settings_result = await session.execute(
+                        select(SiteSettings).where(
+                            SiteSettings.key.in_(["discord_guild_id", "discord_signup_channel_id"])
+                        )
+                    )
+                    settings = {r.key: r.value for r in settings_result.scalars().all()}
+                    guild_id = int(settings["discord_guild_id"]) if settings.get("discord_guild_id") else None
+                channel_id = None
+                if guild_id:
+                    settings_result = await session.execute(
+                        select(SiteSettings).where(SiteSettings.key == "discord_signup_channel_id")
+                    )
+                    row = settings_result.scalar_one_or_none()
+                    channel_id = int(row.value) if row and row.value else None
+                if guild_id and channel_id:
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            r = await client.post(
+                                f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-results",
+                                json={
+                                    "tournament_id": tournament_id,
+                                    "channel_id": channel_id,
+                                    "guild_id": guild_id,
+                                },
+                                headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+                            )
+                            if r.status_code != 200:
+                                logging.getLogger("octane").warning("post-results failed: %s", r.text)
+                    except Exception as e:
+                        logging.getLogger("octane").warning("Failed to post results to Discord: %s", e)
         except Exception as e:
             await session.rollback()
             detail = str(e)
