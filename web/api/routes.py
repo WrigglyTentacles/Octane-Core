@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import random
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -34,6 +35,22 @@ from web.api.utils import player_display_name
 from bot.models.tournament import parse_format_players
 
 router = APIRouter(prefix="/api", tags=["tournaments"])
+
+
+async def _refresh_player_names_from_discord(player_ids: list[int]) -> None:
+    """Ask the bot to refresh display_name from Discord for these player_ids. No-op if bot unreachable."""
+    if not player_ids or not config.INTERNAL_API_SECRET:
+        return
+    url = f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/refresh-players"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                url,
+                json={"player_ids": player_ids},
+                headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+            )
+    except Exception:
+        pass  # Best-effort; don't fail the request
 
 
 # --- Pydantic schemas ---
@@ -131,11 +148,18 @@ class TeamsBulkUpdate(BaseModel):
 
 @router.get("/tournaments/{tournament_id}/participants")
 async def list_participants(tournament_id: int):
-    """List participants: manual entries first, then Discord signups (reaction or /tournament register)."""
+    """List participants: manual entries first, then Discord signups (reaction or /tournament register). Includes all Discord users for team format so they appear in Players/Teams view."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
         if not t:
             raise HTTPException(404, "Tournament not found")
+        # Refresh Discord display names before loading (bot fetches from Discord API)
+        regs_query = select(Registration.player_id).where(Registration.tournament_id == tournament_id)
+        if t.format == "1v1":
+            regs_query = regs_query.where(Registration.team_id.is_(None))
+        regs_pre = await session.execute(regs_query)
+        player_ids = list({r[0] for r in regs_pre.fetchall()})
+        await _refresh_player_names_from_discord(player_ids)
         # Manual participants
         result = await session.execute(
             select(TournamentManualEntry)
@@ -146,21 +170,19 @@ async def list_participants(tournament_id: int):
             .order_by(TournamentManualEntry.sort_order, TournamentManualEntry.id)
         )
         manual = [ManualEntryResponse.model_validate(e) for e in result.scalars().all()]
-        # Discord registrations (reaction signup or /tournament register)
+        # Discord registrations (all of them for team format; unassigned only for 1v1)
         discord_list = []
+        regs_query = select(Registration).where(Registration.tournament_id == tournament_id)
+        if t.format == "1v1":
+            regs_query = regs_query.where(Registration.team_id.is_(None))
         regs_result = await session.execute(
-            select(Registration)
-            .where(
-                Registration.tournament_id == tournament_id,
-                Registration.team_id.is_(None),
-            )
-            .options(selectinload(Registration.player))
+            regs_query.options(selectinload(Registration.player))
         )
         for reg in regs_result.scalars().all():
             discord_list.append(
                 DiscordRegistrationResponse(
                     id=f"discord:{reg.player_id}",
-                    display_name=reg.player.display_name or str(reg.player_id),
+                    display_name=player_display_name(reg.player, reg.player_id),
                     player_id=reg.player_id,
                 )
             )
@@ -449,6 +471,12 @@ async def list_teams(tournament_id: int):
             raise HTTPException(404, "Tournament not found")
         if t.format == "1v1":
             return []
+        # Refresh Discord display names before loading (bot fetches from Discord API)
+        regs_pre = await session.execute(
+            select(Registration.player_id).where(Registration.tournament_id == tournament_id)
+        )
+        player_ids = list({r[0] for r in regs_pre.fetchall()})
+        await _refresh_player_names_from_discord(player_ids)
         result = await session.execute(
             select(Team)
             .where(Team.tournament_id == tournament_id)
@@ -508,7 +536,7 @@ async def substitute_standby(tournament_id: int, body: SubstituteRequest):
 
 @router.post("/tournaments/{tournament_id}/teams/regenerate")
 async def regenerate_teams(tournament_id: int, user: User = Depends(require_moderator_user)):
-    """Regenerate teams from participants + standby, then regenerate bracket. Use when players leave and you need to rebalance."""
+    """Regenerate teams from participants + standby (manual and Discord), then regenerate bracket. Use when players leave and you need to rebalance."""
     from bot.services.bracket_gen import create_manual_bracket
 
     async with async_session_factory() as session:
@@ -516,19 +544,49 @@ async def regenerate_teams(tournament_id: int, user: User = Depends(require_mode
         if not t or t.format == "1v1":
             raise HTTPException(404, "Tournament not found or not a team format")
         players_per_team = parse_format_players(t.format)
-        entries_result = await session.execute(
+
+        # Build pool: participants first, then Discord, then standby (standby used last)
+        participants_result = await session.execute(
             select(TournamentManualEntry)
             .where(
                 TournamentManualEntry.tournament_id == tournament_id,
-                TournamentManualEntry.list_type.in_(["participant", "standby"]),
+                TournamentManualEntry.list_type == "participant",
             )
-            .order_by(TournamentManualEntry.list_type, TournamentManualEntry.sort_order, TournamentManualEntry.id)
+            .order_by(TournamentManualEntry.sort_order, TournamentManualEntry.id)
         )
-        entries = entries_result.scalars().all()
-        for e in entries:
-            e.list_type = "participant"
-        if len(entries) < players_per_team:
+        manual_participants = list(participants_result.scalars().all())
+
+        regs_result = await session.execute(
+            select(Registration)
+            .where(Registration.tournament_id == tournament_id)
+            .options(selectinload(Registration.player))
+        )
+        discord_regs = list(regs_result.scalars().all())
+
+        standby_result = await session.execute(
+            select(TournamentManualEntry)
+            .where(
+                TournamentManualEntry.tournament_id == tournament_id,
+                TournamentManualEntry.list_type == "standby",
+            )
+            .order_by(TournamentManualEntry.sort_order, TournamentManualEntry.id)
+        )
+        manual_standby = list(standby_result.scalars().all())
+        # Do NOT change list_type to "participant" - that would create duplicates (standby
+        # would appear in both participants and standby lists, breaking subsequent regenerations)
+
+        # Pool order: participants, Discord, standby (standby used last when filling)
+        pool: list[tuple[str, object]] = [(e, "manual") for e in manual_participants]
+        pool += [(r, "discord") for r in discord_regs]
+        pool += [(e, "manual") for e in manual_standby]
+        random.shuffle(pool)
+
+        if len(pool) < players_per_team:
             raise HTTPException(400, f"Need at least {players_per_team} players to form teams")
+
+        # Clear team assignments before deleting teams (keeps Discord users in participants list)
+        await session.execute(update(Registration).where(Registration.tournament_id == tournament_id).values(team_id=None))
+        await session.flush()  # Ensure update is applied before delete (avoids FK/cascade issues)
         existing_teams = await session.execute(select(Team).where(Team.tournament_id == tournament_id))
         for team in existing_teams.scalars().all():
             await session.delete(team)
@@ -537,16 +595,29 @@ async def regenerate_teams(tournament_id: int, user: User = Depends(require_mode
         if bracket:
             await session.delete(bracket)
         await session.flush()
+
         team_num = 0
-        for i in range(0, len(entries), players_per_team):
-            chunk = entries[i : i + players_per_team]
+        for i in range(0, len(pool), players_per_team):
+            chunk = pool[i : i + players_per_team]
             if len(chunk) < players_per_team:
                 break
             team = Team(tournament_id=tournament_id, name=f"Team {team_num + 1}")
             session.add(team)
             await session.flush()
-            for j, entry in enumerate(chunk):
-                session.add(TeamManualMember(team_id=team.id, manual_entry_id=entry.id, sort_order=j))
+            for j, (item, kind) in enumerate(chunk):
+                if kind == "manual":
+                    session.add(TeamManualMember(team_id=team.id, manual_entry_id=item.id, sort_order=j))
+                else:
+                    # Re-query Registration after teams were deleted (like update_teams)
+                    reg_result = await session.execute(
+                        select(Registration).where(
+                            Registration.tournament_id == tournament_id,
+                            Registration.player_id == item.player_id,
+                        )
+                    )
+                    reg = reg_result.scalar_one_or_none()
+                    if reg:
+                        reg.team_id = team.id
             team_num += 1
         bracket = await create_manual_bracket(session, tournament_id, {})
         await session.commit()

@@ -9,7 +9,7 @@ import discord
 from sqlalchemy import delete as sql_delete, select
 
 import config
-from bot.models import Registration, Tournament, TournamentSignupMessage
+from bot.models import Player, Registration, Tournament, TournamentSignupMessage
 
 logger = logging.getLogger("octane.http")
 
@@ -130,11 +130,57 @@ async def _handle_post_signup(request: aiohttp.web.Request) -> aiohttp.web.Respo
     return aiohttp.web.json_response({"ok": True, "message_id": msg.id})
 
 
+async def _handle_refresh_players(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """POST /internal/refresh-players - Refresh display_name from Discord for given player_ids."""
+    auth = request.headers.get("Authorization")
+    if not config.INTERNAL_API_SECRET:
+        return aiohttp.web.json_response({"error": "Internal API not configured"}, status=503)
+    if auth != f"Bearer {config.INTERNAL_API_SECRET}":
+        return aiohttp.web.json_response({"error": "Unauthorized"}, status=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return aiohttp.web.json_response({"error": "Invalid JSON"}, status=400)
+
+    player_ids = body.get("player_ids", [])
+    if not isinstance(player_ids, list):
+        return aiohttp.web.json_response({"error": "player_ids must be a list"}, status=400)
+
+    bot = request.app["bot"]
+    from bot.models.base import get_async_session
+
+    refreshed = 0
+    async for session in get_async_session():
+        for pid in player_ids:
+            try:
+                pid = int(pid)
+            except (TypeError, ValueError):
+                continue
+            try:
+                user = bot.get_user(pid) or await bot.fetch_user(pid)
+                display_name = user.display_name if user else None
+            except Exception:
+                display_name = None
+            player = await session.get(Player, pid)
+            if player:
+                player.display_name = display_name or player.display_name
+                refreshed += 1
+            elif display_name:
+                session.add(Player(discord_id=pid, display_name=display_name))
+                refreshed += 1
+        await session.commit()
+        break
+
+    return aiohttp.web.json_response({"ok": True, "refreshed": refreshed})
+
+
 def create_app(bot) -> aiohttp.web.Application:
     """Create aiohttp app with bot reference."""
     app = aiohttp.web.Application()
     app["bot"] = bot
     app.router.add_post("/internal/post-signup", _handle_post_signup)
+    app.router.add_post("/internal/refresh-players", _handle_refresh_players)
     return app
 
 

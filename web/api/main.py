@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamManualMember, Tournament, TournamentManualEntry
 from bot.models.base import async_session_factory, init_db
 
-from web.api.routes import router as api_router
+from web.api.routes import router as api_router, _refresh_player_names_from_discord
 from web.api.utils import player_display_name
 from web.api.auth_routes import router as auth_router
 from web.api.settings_routes import router as settings_router
@@ -77,6 +77,17 @@ async def get_bracket(tournament_id: int):
         )
         matches = matches_result.scalars().all()
         is_team = t.format != "1v1"
+        # Refresh Discord display names for 1v1 bracket (bot fetches from Discord API)
+        if not is_team:
+            player_ids = []
+            for m in matches:
+                if m.player1_id:
+                    player_ids.append(m.player1_id)
+                if m.player2_id:
+                    player_ids.append(m.player2_id)
+                if m.winner_player_id:
+                    player_ids.append(m.winner_player_id)
+            await _refresh_player_names_from_discord(list(set(player_ids)))
         rounds = {}
         for m in matches:
             r = m.round_num

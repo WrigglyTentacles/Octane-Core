@@ -1907,7 +1907,7 @@ function App() {
       const data = await parseJson(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to generate');
       await fetchData({ silent: true });
-      setActiveTab('bracket');
+      navigate('/bracket');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1980,7 +1980,6 @@ function App() {
       const data = await parseJson(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to regenerate');
       await fetchData({ silent: true });
-      setActiveTab('bracket');
     } catch (err) {
       setError(err.message);
     } finally {

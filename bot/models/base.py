@@ -49,6 +49,8 @@ _MIGRATIONS = [
     "ALTER TABLE tournament_manual_entries ADD COLUMN original_list_type VARCHAR(16)",
     "UPDATE tournament_manual_entries SET original_list_type = list_type WHERE original_list_type IS NULL",
     "ALTER TABLE tournaments ADD COLUMN archived INTEGER DEFAULT 0",
+    # Recover from failed migration: ensure players table exists (e.g. if DROP succeeded but RENAME failed)
+    "CREATE TABLE IF NOT EXISTS players (discord_id INTEGER NOT NULL PRIMARY KEY, display_name VARCHAR(128), epic_username VARCHAR(64), epic_id VARCHAR(32))",
 ]
 
 

@@ -73,12 +73,15 @@ async def _handle_reaction_add(payload: discord.RawReactionActionEvent, bot: com
         # Get or create Player (open by default — no /register required)
         player_result = await session.execute(select(Player).where(Player.discord_id == payload.user_id))
         player = player_result.scalar_one_or_none()
+        user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
+        display_name = user.display_name if user else str(payload.user_id)
         if not player:
-            user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
-            display_name = user.display_name if user else str(payload.user_id)
             player = Player(discord_id=payload.user_id, display_name=display_name)
             session.add(player)
             await session.flush()  # Get player in session before adding Registration
+        else:
+            # Refresh display_name when user reacts (may have changed)
+            player.display_name = display_name
 
         # Check if already registered
         existing = await session.execute(
