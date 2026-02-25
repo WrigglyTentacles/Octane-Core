@@ -1452,6 +1452,7 @@ function App({ isCurrentPage = false }) {
     }
   });
   const [discordConfigReady, setDiscordConfigReady] = useState(false);
+  const [postDiscordLoading, setPostDiscordLoading] = useState(null); // null | 'teams' | 'round' | 'results'
 
   const fetchTournaments = async (includeArchived = showArchived) => {
     try {
@@ -2021,6 +2022,24 @@ function App({ isCurrentPage = false }) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const postToDiscord = async (type) => {
+    setPostDiscordLoading(type);
+    setError(null);
+    try {
+      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/post-${type}`, {
+        method: 'POST',
+      });
+      const data = await parseJson(res);
+      if (!res.ok) throw new Error(data?.detail || data?.error || `Failed to post ${type}`);
+      setCopyFeedback(`Posted ${type} to Discord`);
+      setTimeout(() => setCopyFeedback(null), 2000);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPostDiscordLoading(null);
     }
   };
 
@@ -2599,6 +2618,17 @@ function App({ isCurrentPage = false }) {
                       <button onClick={resetBracket} disabled={loading} title="Delete bracket and require regenerate">
                         Reset
                       </button>
+                      <span style={{ color: 'var(--text-muted)', marginRight: 4 }}>|</span>
+                      <button onClick={() => postToDiscord('teams')} disabled={!!postDiscordLoading} title="Post teams/participants to Discord bracket channel">
+                        {postDiscordLoading === 'teams' ? 'Posting…' : 'Post Teams'}
+                      </button>
+                      <button onClick={() => postToDiscord('round')} disabled={!!postDiscordLoading} title="Post current round lineup to Discord">
+                        {postDiscordLoading === 'round' ? 'Posting…' : 'Post Round'}
+                      </button>
+                      <button onClick={() => postToDiscord('results')} disabled={!!postDiscordLoading} title="Post tournament results to Discord (requires champion)">
+                        {postDiscordLoading === 'results' ? 'Posting…' : 'Post Results'}
+                      </button>
+                      {copyFeedback && <span style={{ color: 'var(--accent)', fontSize: 13 }}>{copyFeedback}</span>}
                     </div>
                   )}
                   <BracketView bracket={bracket} tournament={bracket.tournament} teams={teams} participants={participants} standby={standby} onUpdateMatch={updateMatch} onAdvanceOpponent={advanceOpponent} onSetWinner={setWinner} onSwapWinner={swapWinner} onClearWinner={clearWinner} onSwapSlots={swapSlots} canEdit={effectiveCanEdit} />

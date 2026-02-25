@@ -195,6 +195,74 @@ async def get_champion_info(
     return None, None
 
 
+async def build_teams_embed(
+    session: AsyncSession,
+    t,
+    is_team: bool,
+    guild: discord.Guild | None = None,
+    client: discord.Client | None = None,
+) -> discord.Embed:
+    """Build Discord embed listing all teams (or participants for 1v1) with rosters."""
+    if is_team:
+        result = await session.execute(
+            select(Team)
+            .where(Team.tournament_id == t.id)
+            .order_by(Team.id)
+            .options(
+                selectinload(Team.members).selectinload(Registration.player),
+                selectinload(Team.manual_members).selectinload(TeamManualMember.manual_entry),
+            )
+        )
+        teams = result.scalars().all()
+        lines = []
+        for team in teams:
+            display = await resolve_entity(session, team.id, True, guild, client)
+            lines.append(f"• {display}")
+        title = f"Teams — {t.name}"
+        field_name = "Teams"
+    else:
+        # 1v1: manual participants + Discord registrations
+        entries_result = await session.execute(
+            select(TournamentManualEntry)
+            .where(
+                TournamentManualEntry.tournament_id == t.id,
+                TournamentManualEntry.list_type == "participant",
+            )
+            .order_by(TournamentManualEntry.sort_order, TournamentManualEntry.id)
+        )
+        entries = entries_result.scalars().all()
+        regs_result = await session.execute(
+            select(Registration)
+            .where(
+                Registration.tournament_id == t.id,
+                Registration.team_id.is_(None),
+            )
+            .options(selectinload(Registration.player))
+        )
+        regs = regs_result.scalars().all()
+        lines = []
+        for e in entries:
+            lines.append(f"• {e.display_name}")
+        for reg in regs:
+            name = await resolve_entity(session, reg.player_id, False, guild, client)
+            lines.append(f"• {name}")
+        title = f"Participants — {t.name}"
+        field_name = "Participants"
+
+    if not lines:
+        lines = ["(none)"]
+
+    embed = discord.Embed(
+        title=title,
+        description="Assemble before round 1. Use `/bracket next` or `/bracket status` for your match.",
+        color=discord.Color.green(),
+    )
+    embed.add_field(name=field_name, value="\n".join(lines), inline=False)
+    embed.set_footer(text=f"Tournament ID: {t.id}")
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
 def build_results_embed(t, champion_name: str, champion_members: list | None = None) -> discord.Embed:
     """Build Discord embed for tournament results."""
     embed = discord.Embed(
@@ -263,22 +331,27 @@ async def build_round_lineup_embed(
     else:
         title = f"🏆 Round {round_num} — {t.name}"
 
-    lines = []
+    match_blocks = []
     for m in sorted(current_round_matches, key=lambda x: x.match_num):
         s1 = await resolve_match_slot(session, m, 1, is_team, guild, client)
         s2 = await resolve_match_slot(session, m, 2, is_team, guild, client)
-        lines.append(f"**R{m.round_num} M{m.match_num}** (ID: {m.id}) — {s1} vs {s2}")
+        block = (
+            f"**R{m.round_num} M{m.match_num}** (ID: {m.id})\n"
+            f"Slot 1: {s1}\n"
+            f"Slot 2: {s2}"
+        )
+        match_blocks.append(block)
 
     embed = discord.Embed(
         title=title,
         description=(
             f"**Current round lineup** — teams facing each other this round.\n\n"
             f"Use `/bracket next` or `/bracket status` for your match.\n"
-            f"Moderators: use `/bracket update` with match ID to record results."
+            f"Moderators: use `/bracket update` with match ID and winner slot (1 or 2) to record results."
         ),
         color=discord.Color.blue(),
     )
-    embed.add_field(name="Matches", value="\n".join(lines), inline=False)
+    embed.add_field(name="Matches", value="\n\n".join(match_blocks), inline=False)
     embed.set_footer(text=f"Tournament ID: {t.id}")
     embed.timestamp = discord.utils.utcnow()
     return embed

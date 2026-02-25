@@ -15,6 +15,7 @@ from bot.services.bracket_gen import advance_rounds_until_incomplete, advance_wi
 from bot.services.discord_embeds import (
     build_results_embed,
     build_round_lineup_embed,
+    build_teams_embed,
     champion_match_has_winner,
     get_champion_info,
     resolve_entity,
@@ -636,10 +637,78 @@ async def bracket_post(
         return
 
 
+@bracket_group.command(name="post-teams", description="Post teams/participants to channel (Moderator+)")
+@app_commands.describe(
+    tournament_id="Tournament ID (optional — uses most recent active if omitted)",
+    channel="Channel to post in (default: current channel)",
+)
+@mod_or_higher()
+async def bracket_post_teams(
+    interaction: discord.Interaction,
+    tournament_id: int | None = None,
+    channel: discord.TextChannel | None = None,
+) -> None:
+    """Post all teams or participants with rosters so they can assemble before round 1."""
+    if not interaction.guild_id:
+        await interaction.response.send_message("Use this in a server.", ephemeral=True)
+        return
+    target_channel = channel or interaction.channel
+    if not isinstance(target_channel, discord.TextChannel):
+        await interaction.response.send_message("Cannot post in this channel type.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    async for session in get_async_session():
+        if tournament_id:
+            t = await get_tournament(session, tournament_id, interaction.guild_id)
+            if not t:
+                await interaction.followup.send("Tournament not found.", ephemeral=True)
+                return
+        else:
+            # Most recent active (open/in_progress) tournament in this guild
+            result = await session.execute(
+                select(Tournament)
+                .where(
+                    (Tournament.guild_id == interaction.guild_id) | (Tournament.guild_id == 0),
+                    Tournament.status.in_(["open", "in_progress"]),
+                    Tournament.archived == False,  # noqa: E712
+                )
+                .order_by(Tournament.id.desc())
+                .limit(1)
+            )
+            t = result.scalar_one_or_none()
+            if not t:
+                await interaction.followup.send(
+                    "No active tournament found.",
+                    ephemeral=True,
+                )
+                return
+
+        is_team = t.format != "1v1"
+        guild, client = interaction.guild, interaction.client
+        embed = await build_teams_embed(session, t, is_team, guild, client)
+
+        try:
+            await target_channel.send(embed=embed)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                f"Missing Access: I can't post in {target_channel.mention}. "
+                "Ensure my role has Send Messages and Embed Links.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            f"Posted teams to {target_channel.mention}.",
+            ephemeral=True,
+        )
+        return
+
+
 @bracket_group.command(name="update", description="Record match winner (Moderator+)")
 @app_commands.describe(
     match_id="Match ID (from bracket view)",
-    winner_slot="1 or 2 for team1/player1 or team2/player2",
+    winner_slot="1 or 2 for slot 1 or slot 2 (winner)",
 )
 @mod_or_higher()
 async def update(

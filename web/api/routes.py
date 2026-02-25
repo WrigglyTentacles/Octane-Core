@@ -112,6 +112,26 @@ async def _post_bracket_to_discord(session, tournament_id: int, t) -> None:
         logging.getLogger("octane").warning("Failed to post bracket to Discord: %s", e)
 
 
+async def _post_teams_to_discord(session, tournament_id: int, t) -> None:
+    """Post teams/participants embed to Discord. No-op if not configured or bot unreachable."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        return
+    guild_id, channel_id = await _get_discord_bracket_channel(session, t)
+    if not (guild_id and channel_id):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-teams",
+                json={"tournament_id": tournament_id, "channel_id": channel_id, "guild_id": guild_id},
+                headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+            )
+            if r.status_code != 200:
+                logging.getLogger("octane").warning("post-teams failed: %s", r.text)
+    except Exception as e:
+        logging.getLogger("octane").warning("Failed to post teams to Discord: %s", e)
+
+
 # --- Pydantic schemas ---
 
 
@@ -1099,7 +1119,8 @@ async def generate_bracket(tournament_id: int, body: Optional[GenerateBracketReq
             raise HTTPException(400, str(e))
         if not bracket:
             raise HTTPException(400, "Could not generate bracket. Add participants first.")
-        # Post round 1 lineup to Discord when bracket is generated
+        # Post teams first, then round 1 lineup to Discord when bracket is generated
+        await _post_teams_to_discord(session, tournament_id, t)
         await _post_bracket_to_discord(session, tournament_id, t)
         return {"ok": True, "bracket_id": bracket.id}
 
@@ -1144,9 +1165,91 @@ async def regenerate_bracket(tournament_id: int, body: Optional[GenerateBracketR
             raise HTTPException(400, str(e))
         if not bracket:
             raise HTTPException(400, "Could not generate bracket. Add participants first.")
-        # Post round 1 lineup to Discord when bracket is generated
+        # Post teams first, then round 1 lineup to Discord when bracket is generated
+        await _post_teams_to_discord(session, tournament_id, t)
         await _post_bracket_to_discord(session, tournament_id, t)
         return {"ok": True, "bracket_id": bracket.id}
+
+
+@router.post("/tournaments/{tournament_id}/bracket/post-teams")
+async def post_teams_to_discord(tournament_id: int, user: User = Depends(require_moderator_user)):
+    """Manually post teams/participants embed to Discord bracket channel."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        raise HTTPException(503, "Discord integration not configured")
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            raise HTTPException(404, "Tournament not found")
+        guild_id, channel_id = await _get_discord_bracket_channel(session, t)
+        if not (guild_id and channel_id):
+            raise HTTPException(400, "Discord bracket channel not configured. Set it in Settings.")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-teams",
+                    json={"tournament_id": tournament_id, "channel_id": channel_id, "guild_id": guild_id},
+                    headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+                )
+        except Exception as e:
+            raise HTTPException(503, f"Could not reach bot: {e}") from e
+        if r.status_code != 200:
+            err = r.json().get("error", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+            raise HTTPException(400, err)
+        return {"ok": True, "message_id": r.json().get("message_id")}
+
+
+@router.post("/tournaments/{tournament_id}/bracket/post-round")
+async def post_round_to_discord(tournament_id: int, user: User = Depends(require_moderator_user)):
+    """Manually post current round lineup embed to Discord bracket channel."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        raise HTTPException(503, "Discord integration not configured")
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            raise HTTPException(404, "Tournament not found")
+        guild_id, channel_id = await _get_discord_bracket_channel(session, t)
+        if not (guild_id and channel_id):
+            raise HTTPException(400, "Discord bracket channel not configured. Set it in Settings.")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-bracket",
+                    json={"tournament_id": tournament_id, "channel_id": channel_id, "guild_id": guild_id},
+                    headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+                )
+        except Exception as e:
+            raise HTTPException(503, f"Could not reach bot: {e}") from e
+        if r.status_code != 200:
+            err = r.json().get("error", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+            raise HTTPException(400, err)
+        return {"ok": True, "message_id": r.json().get("message_id")}
+
+
+@router.post("/tournaments/{tournament_id}/bracket/post-results")
+async def post_results_to_discord(tournament_id: int, user: User = Depends(require_moderator_user)):
+    """Manually post tournament results embed to Discord bracket channel (requires champion)."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        raise HTTPException(503, "Discord integration not configured")
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            raise HTTPException(404, "Tournament not found")
+        guild_id, channel_id = await _get_discord_bracket_channel(session, t)
+        if not (guild_id and channel_id):
+            raise HTTPException(400, "Discord bracket channel not configured. Set it in Settings.")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-results",
+                    json={"tournament_id": tournament_id, "channel_id": channel_id, "guild_id": guild_id},
+                    headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+                )
+        except Exception as e:
+            raise HTTPException(503, f"Could not reach bot: {e}") from e
+        if r.status_code != 200:
+            err = r.json().get("error", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+            raise HTTPException(400, err)
+        return {"ok": True, "message_id": r.json().get("message_id")}
 
 
 # --- Bracket match updates (for drag-drop) ---
