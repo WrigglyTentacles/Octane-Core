@@ -591,6 +591,45 @@ async def advance_rounds_until_incomplete(
     return any_advanced
 
 
+async def round_just_completed(
+    session: AsyncSession,
+    bracket_id: int,
+    bracket_type: str,
+    match_round_num: int,
+    match_section: str | None,
+    is_team: bool,
+) -> bool:
+    """True if all matches in the given (round, section) have winners. Used for round_robin and double_elim Discord posting."""
+    if bracket_type not in ("round_robin", "double_elim"):
+        return False
+
+    if match_section is None:
+        section_filter = BracketMatch.bracket_section.is_(None)
+    else:
+        section_filter = BracketMatch.bracket_section == match_section
+
+    result = await session.execute(
+        select(BracketMatch)
+        .where(
+            BracketMatch.bracket_id == bracket_id,
+            BracketMatch.round_num == match_round_num,
+            section_filter,
+        )
+    )
+    round_matches = list(result.scalars().all())
+    if not round_matches:
+        return False
+
+    for m in round_matches:
+        entity = _get_winner_entity(m, is_team)
+        had_bye = _match_had_bye(m)
+        if not entity and had_bye:
+            entity = _get_entity_from_slot(m, 1, is_team)
+        if not entity:
+            return False
+    return True
+
+
 def _assign_winner_from_entity(m: BracketMatch, entity: Tuple, is_team: bool) -> None:
     """Set winner on match from entity tuple (team_id, True) or (player_id, False, False) or (('manual', id), False, True)."""
     m.winner_team_id = None

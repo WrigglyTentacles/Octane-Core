@@ -1242,7 +1242,11 @@ async def update_match(
     user: User = Depends(require_moderator_user),
 ):
     """Update a bracket match (assign teams/players, set winner). Single elim: advance when round complete (randomize bye, exclude teams that had bye). Double elim: advance immediately. Auto-sets tournament to completed when champion is declared."""
-    from bot.services.bracket_gen import advance_rounds_until_incomplete, advance_winner_to_parent
+    from bot.services.bracket_gen import (
+        advance_rounds_until_incomplete,
+        advance_winner_to_parent,
+        round_just_completed,
+    )
 
     async with async_session_factory() as session:
         match = await session.get(BracketMatch, match_id)
@@ -1275,6 +1279,25 @@ async def update_match(
                 if bracket.bracket_type == "single_elim":
                     round_advanced = await advance_rounds_until_incomplete(
                         session, bracket.id, match.round_num, is_team
+                    )
+                elif bracket.bracket_type == "double_elim":
+                    await advance_winner_to_parent(session, match, is_team)
+                    round_advanced = await round_just_completed(
+                        session,
+                        bracket.id,
+                        "double_elim",
+                        match.round_num,
+                        match.bracket_section,
+                        is_team,
+                    )
+                elif bracket.bracket_type == "round_robin":
+                    round_advanced = await round_just_completed(
+                        session,
+                        bracket.id,
+                        "round_robin",
+                        match.round_num,
+                        None,
+                        is_team,
                     )
                 else:
                     await advance_winner_to_parent(session, match, is_team)

@@ -253,6 +253,16 @@ async def build_round_lineup_embed(
 
     section, round_num = current_round_key
 
+    if section == "grand_finals":
+        title = f"🏆 Grand Finals — {t.name}"
+    elif section == "winners":
+        title = f"🏆 Primary Round {round_num} — {t.name}"
+    elif section == "losers":
+        display_round = round_num - 10 if round_num >= 10 else round_num
+        title = f"🏆 Secondary Round {display_round} — {t.name}"
+    else:
+        title = f"🏆 Round {round_num} — {t.name}"
+
     lines = []
     for m in sorted(current_round_matches, key=lambda x: x.match_num):
         s1 = await resolve_match_slot(session, m, 1, is_team, guild, client)
@@ -260,7 +270,7 @@ async def build_round_lineup_embed(
         lines.append(f"**R{m.round_num} M{m.match_num}** (ID: {m.id}) — {s1} vs {s2}")
 
     embed = discord.Embed(
-        title=f"🏆 Round {round_num} — {t.name}",
+        title=title,
         description=(
             f"**Current round lineup** — teams facing each other this round.\n\n"
             f"Use `/bracket next` or `/bracket status` for your match.\n"
