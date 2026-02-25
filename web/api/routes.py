@@ -53,6 +53,65 @@ async def _refresh_player_names_from_discord(player_ids: list[int]) -> None:
         pass  # Best-effort; don't fail the request
 
 
+async def _get_discord_bracket_channel(session, t) -> tuple[int | None, int | None]:
+    """Resolve guild_id and channel_id for bracket posts. Prefer bracket channel, fallback to signup."""
+    settings_result = await session.execute(
+        select(SiteSettings).where(
+            SiteSettings.key.in_(
+                [
+                    "discord_guild_id",
+                    "discord_signup_channel_id",
+                    "discord_bracket_guild_id",
+                    "discord_bracket_channel_id",
+                ]
+            )
+        )
+    )
+    settings = {r.key: r.value for r in settings_result.scalars().all()}
+    guild_id = None
+    channel_id = None
+    if settings.get("discord_bracket_channel_id") and settings.get("discord_bracket_guild_id"):
+        try:
+            guild_id = int(settings["discord_bracket_guild_id"])
+            channel_id = int(settings["discord_bracket_channel_id"])
+        except (ValueError, TypeError):
+            pass
+    if not (guild_id and channel_id) and settings.get("discord_guild_id") and settings.get("discord_signup_channel_id"):
+        try:
+            guild_id = int(settings["discord_guild_id"])
+            channel_id = int(settings["discord_signup_channel_id"])
+        except (ValueError, TypeError):
+            pass
+    if not guild_id and t and t.guild_id:
+        guild_id = t.guild_id
+        if settings.get("discord_signup_channel_id"):
+            try:
+                channel_id = int(settings["discord_signup_channel_id"])
+            except (ValueError, TypeError):
+                pass
+    return guild_id, channel_id
+
+
+async def _post_bracket_to_discord(session, tournament_id: int, t) -> None:
+    """Post round lineup embed to Discord. No-op if not configured or bot unreachable."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        return
+    guild_id, channel_id = await _get_discord_bracket_channel(session, t)
+    if not (guild_id and channel_id):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-bracket",
+                json={"tournament_id": tournament_id, "channel_id": channel_id, "guild_id": guild_id},
+                headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+            )
+            if r.status_code != 200:
+                logging.getLogger("octane").warning("post-bracket failed: %s", r.text)
+    except Exception as e:
+        logging.getLogger("octane").warning("Failed to post bracket to Discord: %s", e)
+
+
 # --- Pydantic schemas ---
 
 
@@ -123,7 +182,7 @@ class BracketMatchUpdate(BaseModel):
 
 class GenerateBracketRequest(BaseModel):
     use_manual_order: bool = True  # Use manual list order; if False, use MMR if available
-    bracket_type: str = "single_elim"  # single_elim or double_elim
+    bracket_type: str = "single_elim"  # single_elim, double_elim, or round_robin
     participant_entry_ids: Optional[list[int]] = None  # Specific manual entries to use (in order)
     team_assignments: Optional[dict[str, list[int]]] = None  # team_name -> [player_ids or entry_ids]
 
@@ -552,9 +611,7 @@ async def substitute_standby(tournament_id: int, body: SubstituteRequest):
 
 @router.post("/tournaments/{tournament_id}/teams/regenerate")
 async def regenerate_teams(tournament_id: int, user: User = Depends(require_moderator_user)):
-    """Regenerate teams from participants + standby (manual and Discord), then regenerate bracket. Use when players leave and you need to rebalance."""
-    from bot.services.bracket_gen import create_manual_bracket
-
+    """Regenerate teams from participants + standby (manual and Discord). Deletes existing bracket; generate bracket separately when ready."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
         if not t or t.format == "1v1":
@@ -636,7 +693,6 @@ async def regenerate_teams(tournament_id: int, user: User = Depends(require_mode
                     if reg:
                         reg.team_id = team.id
             team_num += 1
-        bracket = await create_manual_bracket(session, tournament_id, {})
         await session.commit()
         return {"ok": True, "teams_created": team_num}
 
@@ -1043,7 +1099,26 @@ async def generate_bracket(tournament_id: int, body: Optional[GenerateBracketReq
             raise HTTPException(400, str(e))
         if not bracket:
             raise HTTPException(400, "Could not generate bracket. Add participants first.")
+        # Post round 1 lineup to Discord when bracket is generated
+        await _post_bracket_to_discord(session, tournament_id, t)
         return {"ok": True, "bracket_id": bracket.id}
+
+
+@router.delete("/tournaments/{tournament_id}/bracket")
+async def delete_bracket(tournament_id: int, user: User = Depends(require_moderator_user)):
+    """Delete the bracket. Bracket must be regenerated manually via Generate Bracket."""
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            raise HTTPException(404, "Tournament not found")
+        existing = await session.execute(
+            select(Bracket).where(Bracket.tournament_id == tournament_id)
+        )
+        bracket = existing.scalar_one_or_none()
+        if bracket:
+            await session.delete(bracket)
+            await session.commit()
+        return {"ok": True}
 
 
 @router.post("/tournaments/{tournament_id}/bracket/regenerate")
@@ -1069,6 +1144,8 @@ async def regenerate_bracket(tournament_id: int, body: Optional[GenerateBracketR
             raise HTTPException(400, str(e))
         if not bracket:
             raise HTTPException(400, "Could not generate bracket. Add participants first.")
+        # Post round 1 lineup to Discord when bracket is generated
+        await _post_bracket_to_discord(session, tournament_id, t)
         return {"ok": True, "bracket_id": bracket.id}
 
 
@@ -1191,11 +1268,14 @@ async def update_match(
             if hasattr(match, key):
                 setattr(match, key, value)
         champion_declared = False
+        round_advanced = False
         try:
             if winner_updated:
                 await session.flush()  # Ensure winner is visible to advancement queries
                 if bracket.bracket_type == "single_elim":
-                    await advance_rounds_until_incomplete(session, bracket.id, match.round_num, is_team)
+                    round_advanced = await advance_rounds_until_incomplete(
+                        session, bracket.id, match.round_num, is_team
+                    )
                 else:
                     await advance_winner_to_parent(session, match, is_team)
                 # Auto-complete tournament when champion is declared (direct or via advancement)
@@ -1224,40 +1304,48 @@ async def update_match(
                 if champion_declared:
                     t.status = "completed"
             await session.commit()
-            # Post results to Discord when champion declared from web (if Discord configured)
-            if champion_declared and config.INTERNAL_API_SECRET and config.BOT_INTERNAL_URL:
-                guild_id = t.guild_id if t.guild_id else None
-                if not guild_id:
-                    settings_result = await session.execute(
-                        select(SiteSettings).where(
-                            SiteSettings.key.in_(["discord_guild_id", "discord_signup_channel_id"])
-                        )
-                    )
-                    settings = {r.key: r.value for r in settings_result.scalars().all()}
-                    guild_id = int(settings["discord_guild_id"]) if settings.get("discord_guild_id") else None
-                channel_id = None
-                if guild_id:
-                    settings_result = await session.execute(
-                        select(SiteSettings).where(SiteSettings.key == "discord_signup_channel_id")
-                    )
-                    row = settings_result.scalar_one_or_none()
-                    channel_id = int(row.value) if row and row.value else None
+            # Post to Discord when full round advances or champion declared (if Discord configured)
+            # Single elim: post only when a full round completed (round_advanced). Double elim: no round-based post.
+            should_post = (
+                (champion_declared or (winner_updated and round_advanced))
+                and config.INTERNAL_API_SECRET
+                and config.BOT_INTERNAL_URL
+            )
+            if should_post:
+                guild_id, channel_id = await _get_discord_bracket_channel(session, t)
                 if guild_id and channel_id:
+                    headers = {"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"}
+                    payload = {
+                        "tournament_id": tournament_id,
+                        "channel_id": channel_id,
+                        "guild_id": guild_id,
+                    }
                     try:
                         async with httpx.AsyncClient(timeout=10.0) as client:
-                            r = await client.post(
-                                f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-results",
-                                json={
-                                    "tournament_id": tournament_id,
-                                    "channel_id": channel_id,
-                                    "guild_id": guild_id,
-                                },
-                                headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
-                            )
-                            if r.status_code != 200:
-                                logging.getLogger("octane").warning("post-results failed: %s", r.text)
+                            if champion_declared:
+                                r = await client.post(
+                                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-results",
+                                    json=payload,
+                                    headers=headers,
+                                )
+                                if r.status_code != 200:
+                                    logging.getLogger("octane").warning(
+                                        "post-results failed: %s", r.text
+                                    )
+                            elif round_advanced:
+                                r = await client.post(
+                                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-bracket",
+                                    json=payload,
+                                    headers=headers,
+                                )
+                                if r.status_code != 200:
+                                    logging.getLogger("octane").warning(
+                                        "post-bracket failed: %s", r.text
+                                    )
                     except Exception as e:
-                        logging.getLogger("octane").warning("Failed to post results to Discord: %s", e)
+                        logging.getLogger("octane").warning(
+                            "Failed to post to Discord: %s", e
+                        )
         except Exception as e:
             await session.rollback()
             detail = str(e)

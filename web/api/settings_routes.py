@@ -1,6 +1,8 @@
 """Site settings API: title, theme colors (public read, admin write)."""
 from __future__ import annotations
 
+import httpx
+
 import config
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -9,7 +11,7 @@ from sqlalchemy import select
 
 from bot.models import SiteSettings
 from bot.models.base import async_session_factory
-from web.auth import require_admin_user
+from web.auth import require_admin_user, require_moderator_user
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -100,14 +102,76 @@ class SettingsImport(BaseModel):
 
 @router.get("/discord")
 async def get_discord_settings():
-    """Get Discord config for web-triggered signup. Only enabled when INTERNAL_API_SECRET is set."""
+    """Get Discord config for web-triggered signup and bracket posts. Only enabled when INTERNAL_API_SECRET is set."""
     enabled = bool(config.INTERNAL_API_SECRET)
     return {
         "enabled": enabled,
         "discord_guild_id": await _get_setting("discord_guild_id") or "",
         "discord_signup_channel_id": await _get_setting("discord_signup_channel_id") or "",
         "discord_signup_channel_name": await _get_setting("discord_signup_channel_name") or "",
+        "discord_bracket_guild_id": await _get_setting("discord_bracket_guild_id") or "",
+        "discord_bracket_channel_id": await _get_setting("discord_bracket_channel_id") or "",
+        "discord_bracket_channel_name": await _get_setting("discord_bracket_channel_name") or "",
     }
+
+
+class DiscordBracketUpdate(BaseModel):
+    discord_bracket_guild_id: str | None = None
+    discord_bracket_channel_id: str | None = None
+    discord_bracket_channel_name: str | None = None
+
+
+@router.patch("/discord")
+async def update_discord_bracket(
+    body: DiscordBracketUpdate, admin=Depends(require_admin_user)
+):
+    """Update bracket post channel (admin only)."""
+    updates = body.model_dump(exclude_unset=True)
+    for key, value in updates.items():
+        await _set_setting(key, value or "")
+    return await get_discord_settings()
+
+
+def _bot_request_headers():
+    return {"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"}
+
+
+@router.get("/discord/guilds")
+async def get_discord_guilds(user=Depends(require_moderator_user)):
+    """List guilds the bot is in (for channel picker). Proxies to bot."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        raise HTTPException(503, "Discord integration not configured")
+    url = f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/discord/guilds"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, headers=_bot_request_headers())
+    except httpx.ConnectError as e:
+        raise HTTPException(
+            503, "Could not reach the Discord bot. Ensure it is running."
+        ) from e
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text)
+    return r.json()
+
+
+@router.get("/discord/guilds/{guild_id}/channels")
+async def get_discord_channels(
+    guild_id: str, user=Depends(require_moderator_user)
+):
+    """List text channels in a guild (for channel picker). Proxies to bot."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        raise HTTPException(503, "Discord integration not configured")
+    url = f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/discord/guilds/{guild_id}/channels"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, headers=_bot_request_headers())
+    except httpx.ConnectError as e:
+        raise HTTPException(
+            503, "Could not reach the Discord bot. Ensure it is running."
+        ) from e
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text)
+    return r.json()
 
 
 @router.post("/import")

@@ -25,7 +25,21 @@ export default function SettingsPage() {
     bg_primary: '',
     bg_secondary: '',
   });
-  const [discordSettings, setDiscordSettings] = useState({ enabled: false, discord_guild_id: '', discord_signup_channel_id: '', discord_signup_channel_name: '' });
+  const [discordSettings, setDiscordSettings] = useState({
+    enabled: false,
+    discord_guild_id: '',
+    discord_signup_channel_id: '',
+    discord_signup_channel_name: '',
+    discord_bracket_guild_id: '',
+    discord_bracket_channel_id: '',
+    discord_bracket_channel_name: '',
+  });
+  const [guilds, setGuilds] = useState([]);
+  const [channels, setChannels] = useState([]);
+  const [bracketGuildId, setBracketGuildId] = useState('');
+  const [bracketChannelId, setBracketChannelId] = useState('');
+  const [bracketSaving, setBracketSaving] = useState(false);
+  const [bracketChannelsLoading, setBracketChannelsLoading] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -47,7 +61,12 @@ export default function SettingsPage() {
           discord_guild_id: dData.discord_guild_id || '',
           discord_signup_channel_id: dData.discord_signup_channel_id || '',
           discord_signup_channel_name: dData.discord_signup_channel_name || '',
+          discord_bracket_guild_id: dData.discord_bracket_guild_id || '',
+          discord_bracket_channel_id: dData.discord_bracket_channel_id || '',
+          discord_bracket_channel_name: dData.discord_bracket_channel_name || '',
         });
+        setBracketGuildId(dData.discord_bracket_guild_id || '');
+        setBracketChannelId(dData.discord_bracket_channel_id || '');
       } catch (err) {
         setError(err.message);
       } finally {
@@ -70,6 +89,76 @@ export default function SettingsPage() {
   useEffect(() => {
     if (isAdmin) fetchUsers();
   }, [isAdmin, fetchUsers]);
+
+  const fetchGuilds = useCallback(async () => {
+    if (!discordSettings.enabled) return;
+    try {
+      const res = await authFetch(`${API}/settings/discord/guilds`);
+      const data = await res.json();
+      setGuilds(data.guilds || []);
+    } catch {
+      setGuilds([]);
+    }
+  }, [authFetch, discordSettings.enabled]);
+
+  const fetchChannels = useCallback(async (gid) => {
+    if (!gid) {
+      setChannels([]);
+      return;
+    }
+    setBracketChannelsLoading(true);
+    try {
+      const res = await authFetch(`${API}/settings/discord/guilds/${gid}/channels`);
+      const data = await res.json();
+      setChannels(data.channels || []);
+    } catch {
+      setChannels([]);
+    } finally {
+      setBracketChannelsLoading(false);
+    }
+  }, [authFetch]);
+
+  useEffect(() => {
+    if (discordSettings.enabled) fetchGuilds();
+  }, [discordSettings.enabled, fetchGuilds]);
+
+  useEffect(() => {
+    if (bracketGuildId) fetchChannels(bracketGuildId);
+    else setChannels([]);
+  }, [bracketGuildId, fetchChannels]);
+
+  const handleSaveBracketChannel = async (e) => {
+    e.preventDefault();
+    setBracketSaving(true);
+    setError('');
+    try {
+      const selectedChannel = channels.find((c) => c.id === bracketChannelId);
+      const res = await authFetch(`${API}/settings/discord`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          discord_bracket_guild_id: bracketGuildId || '',
+          discord_bracket_channel_id: bracketChannelId || '',
+          discord_bracket_channel_name: selectedChannel?.name || '',
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data?.detail || 'Failed to save');
+      }
+      const dData = await res.json();
+      setDiscordSettings((s) => ({
+        ...s,
+        discord_bracket_guild_id: dData.discord_bracket_guild_id || '',
+        discord_bracket_channel_id: dData.discord_bracket_channel_id || '',
+        discord_bracket_channel_name: dData.discord_bracket_channel_name || '',
+      }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBracketSaving(false);
+    }
+  };
 
   const handleCreateUser = async (e) => {
     e.preventDefault();
@@ -315,6 +404,56 @@ export default function SettingsPage() {
           ) : (
             <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>
               Not configured yet. Run the command above in Discord, then refresh this page.
+            </p>
+          )}
+
+          <h2 style={{ margin: '24px 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Bracket post channel</h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: 16, fontSize: 14 }}>
+            Round lineup and tournament results will be posted here when you advance rounds via the web UI. If not set, falls back to the signup channel.
+          </p>
+          <form onSubmit={handleSaveBracketChannel} style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end', marginBottom: 12 }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-muted)' }}>Server</label>
+                <select
+                  value={bracketGuildId}
+                  onChange={(e) => { setBracketGuildId(e.target.value); setBracketChannelId(''); }}
+                  style={{ padding: '8px 12px', minWidth: 180 }}
+                >
+                  <option value="">Select server</option>
+                  {guilds.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-muted)' }}>Channel</label>
+                <select
+                  value={bracketChannelId}
+                  onChange={(e) => setBracketChannelId(e.target.value)}
+                  disabled={!bracketGuildId || bracketChannelsLoading}
+                  style={{ padding: '8px 12px', minWidth: 180 }}
+                >
+                  <option value="">Select channel</option>
+                  {channels.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      #{c.name}{c.parent_name ? ` (${c.parent_name})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button type="submit" className="primary" disabled={bracketSaving || !bracketGuildId || !bracketChannelId}>
+                {bracketSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </form>
+          {discordSettings.discord_bracket_channel_id ? (
+            <p style={{ color: 'var(--success)', fontSize: 14 }}>
+              ✓ Bracket posts: #{discordSettings.discord_bracket_channel_name || 'channel'}
+            </p>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>
+              Not configured. Select a server and channel above.
             </p>
           )}
         </div>

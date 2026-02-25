@@ -125,6 +125,21 @@ def preview_bracket_structure(
             r += 1
         return {"rounds": {str(k): v for k, v in rounds.items()}, "bracket_type": "single_elim"}
 
+    if bracket_type == "round_robin":
+        pairings = _round_robin_pairings(n)
+        rounds = {}
+        match_num = 1
+        for round_num, pairs in pairings:
+            rounds[round_num] = []
+            for idx_a, idx_b in pairs:
+                s1 = names[idx_a] if idx_a is not None else "BYE"
+                s2 = names[idx_b] if idx_b is not None else "BYE"
+                if idx_a is None:
+                    s1, s2 = s2, s1  # Put BYE in slot 2 for display
+                rounds[round_num].append(m(s1, s2, round_num, match_num))
+                match_num += 1
+        return {"rounds": {str(k): v for k, v in rounds.items()}, "bracket_type": "round_robin"}
+
     # Double elim preview - fall back to single elim for small brackets (< 8)
     size = next_power_of_2(n)
     if size < 8:
@@ -158,6 +173,32 @@ def preview_bracket_structure(
         rounds[rnum] = [m("TBD", "TBD", rnum, i + 1, "losers") for i in range(l_size)]
     rounds[21] = [m("TBD", "TBD", 21, 1, "grand_finals")]
     return {"rounds": {str(k): v for k, v in rounds.items()}, "bracket_type": "double_elim"}
+
+
+def _round_robin_pairings(n: int) -> List[Tuple[int, List[Tuple[Optional[int], Optional[int]]]]]:
+    """Circle method: returns [(round_num, [(idx_a, idx_b), ...]), ...]. idx is None for bye."""
+    if n < 2:
+        return []
+    # For odd N: add bye (None). Rotating list has N+1 elements.
+    if n % 2 == 1:
+        rotating = list(range(1, n)) + [None]
+        num_rounds = n
+    else:
+        rotating = list(range(1, n))
+        num_rounds = n - 1
+    n_slots = len(rotating) + 1  # +1 for fixed element at index 0
+
+    result: List[Tuple[int, List[Tuple[Optional[int], Optional[int]]]]] = []
+    for r in range(num_rounds):
+        fixed_list = [0] + rotating
+        pairs: List[Tuple[Optional[int], Optional[int]]] = []
+        for i in range(n_slots // 2):
+            a, b = fixed_list[i], fixed_list[n_slots - 1 - i]
+            pairs.append((a, b))
+        result.append((r + 1, pairs))
+        # Rotate: last element moves to front (of rotating part)
+        rotating = [rotating[-1]] + rotating[:-1]
+    return result
 
 
 async def create_single_elim_bracket(
@@ -322,6 +363,10 @@ async def create_manual_bracket(
         return await _create_double_elim_matches(
             session, tournament_id, seeded, is_team
         )
+    if bracket_type == "round_robin":
+        return await _create_round_robin_matches(
+            session, tournament_id, seeded, is_team
+        )
     return await _create_single_elim_matches(
         session, tournament_id, seeded, is_team
     )
@@ -385,11 +430,12 @@ async def advance_winner_to_parent(
 
 async def advance_round_when_complete(
     session: AsyncSession, bracket_id: int, round_num: int, is_team: bool
-) -> None:
+) -> bool:
     """
     When all matches in a round have winners, advance them to the next round.
     Randomize who gets the bye slot, excluding any team that had a bye in this round.
     Only runs for single_elim; no-op if round incomplete or no next round.
+    Returns True if the round was advanced, False otherwise.
     """
     result = await session.execute(
         select(BracketMatch)
@@ -402,7 +448,7 @@ async def advance_round_when_complete(
     )
     round_matches = list(result.scalars().all())
     if not round_matches:
-        return
+        return False
 
     # Check all have winners (bye matches count as won by the team in the filled slot)
     winners = []
@@ -415,7 +461,7 @@ async def advance_round_when_complete(
                 _assign_winner_from_entity(m, entity, is_team)
                 await session.flush()
         if not entity:
-            return  # Round not complete
+            return False  # Round not complete
         winners.append((m, entity, had_bye))
 
     # Get next round matches
@@ -430,7 +476,7 @@ async def advance_round_when_complete(
     )
     next_matches = list(next_result.scalars().all())
     if not next_matches:
-        return
+        return False
 
     # Build slots: (parent_match_id, parent_slot) for each advancing winner
     all_slots = []
@@ -506,15 +552,19 @@ async def advance_round_when_complete(
             else:
                 parent.winner_player_id = parent.player2_id
             await advance_round_when_complete(session, bracket_id, round_num + 1, is_team)
+    return True
 
 
 async def advance_rounds_until_incomplete(
     session: AsyncSession, bracket_id: int, start_round: int, is_team: bool
-) -> None:
-    """Advance start_round, then keep advancing subsequent rounds until one is incomplete."""
+) -> bool:
+    """Advance start_round, then keep advancing subsequent rounds until one is incomplete.
+    Returns True if at least one round was advanced, False otherwise."""
     r = start_round
+    any_advanced = False
     while True:
-        await advance_round_when_complete(session, bracket_id, r, is_team)
+        advanced = await advance_round_when_complete(session, bracket_id, r, is_team)
+        any_advanced = any_advanced or advanced
         await session.flush()
         next_result = await session.execute(
             select(BracketMatch)
@@ -538,6 +588,7 @@ async def advance_rounds_until_incomplete(
         if not all_complete:
             break
         r += 1
+    return any_advanced
 
 
 def _assign_winner_from_entity(m: BracketMatch, entity: Tuple, is_team: bool) -> None:
@@ -740,6 +791,59 @@ async def swap_match_winner(
                 old_loser_entity = old_loser
             _assign_entity_to_match(loser_match, match.loser_advances_to_slot, old_loser_entity, is_team)
             await _clear_winner_and_ancestors(session, loser_match, is_team)
+
+
+async def _create_round_robin_matches(
+    session: AsyncSession,
+    tournament_id: int,
+    seeded: List,
+    is_team: bool,
+) -> Optional[Bracket]:
+    """Create round-robin matches. Everyone plays everyone once. Odd N: each gets exactly one bye."""
+    n = len(seeded)
+    if n < 2:
+        return None
+
+    bracket = Bracket(tournament_id=tournament_id, bracket_type="round_robin")
+    session.add(bracket)
+    await session.flush()
+
+    pairings = _round_robin_pairings(n)
+    match_num = 1
+    for round_num, pairs in pairings:
+        for idx_a, idx_b in pairs:
+            # Bye: put real entity in slot 1, slot 2 empty (convention)
+            if idx_a is None:
+                entity1 = seeded[idx_b]
+                entity2 = None
+            elif idx_b is None:
+                entity1 = seeded[idx_a]
+                entity2 = None
+            else:
+                entity1 = seeded[idx_a]
+                entity2 = seeded[idx_b]
+            m = BracketMatch(
+                bracket_id=bracket.id,
+                round_num=round_num,
+                match_num=match_num,
+            )
+            _assign_entity_to_match(m, 1, entity1, is_team)
+            _assign_entity_to_match(m, 2, entity2, is_team)
+            if entity2 is None and entity1 is not None:
+                # Bye: entity1 auto-wins
+                if is_team:
+                    m.winner_team_id = entity1[0]
+                else:
+                    if entity1[2]:  # is_manual
+                        m.winner_manual_entry_id = entity1[0][1]
+                    else:
+                        m.winner_player_id = entity1[0]
+            session.add(m)
+            match_num += 1
+
+    await session.commit()
+    await session.refresh(bracket)
+    return bracket
 
 
 def _assign_entity_to_match(

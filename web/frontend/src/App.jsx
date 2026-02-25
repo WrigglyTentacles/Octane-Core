@@ -954,7 +954,7 @@ function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPrevi
   );
 }
 
-function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner }) {
+function BracketVisual({ rounds, isTeam, teams, isPreview, showChampion = true, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner }) {
   const roundEntries = Object.entries(rounds || {}).filter(([k]) => Number(k) < 10).sort((a, b) => Number(a[0]) - Number(b[0]));
   if (roundEntries.length === 0) return <p style={{ color: 'var(--text-muted)', padding: 24 }}>No matches to display.</p>;
 
@@ -974,7 +974,7 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwap
     const w2 = m.winner_name === s2;
     const bothFilled = (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id);
     const canSetWinner = bothFilled && !m.winner_name && !hasBye;
-    const isChampion = m.winner_name && String(roundNum) === String(lastRoundNum);
+    const isChampion = showChampion && m.winner_name && String(roundNum) === String(lastRoundNum);
     return (
       <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 0, minWidth: colW }}>
         <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teams} teamId={m.team1_id} isTeam={isTeam} isPreview={isPreview} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={1} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} hasBye={hasBye} />
@@ -1237,6 +1237,7 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
   const rounds = enrichRoundsWithInferredWinners(rawRounds);
   const allMatches = Object.values(rounds).flat();
   const isDoubleElim = bracket?.bracket_type === 'double_elim';
+  const isRoundRobin = bracket?.bracket_type === 'round_robin';
 
   const bySection = isDoubleElim
     ? {
@@ -1344,6 +1345,7 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
         isTeam={isTeam}
         teams={teamsToUse}
         isPreview={isPreview}
+        showChampion={!isRoundRobin}
         onUpdateMatch={canEdit ? onUpdateMatch : null}
         onSwapSlots={canEdit ? onSwapSlots : null}
         onAdvanceOpponent={canEdit ? onAdvanceOpponent : null}
@@ -1387,7 +1389,7 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
     <div style={{ marginTop: 24 }}>
       <div style={{ minWidth: 0 }}>
         <h2 style={{ margin: '0 0 20px', fontSize: 22, color: 'var(--text-primary)' }}>
-          {bracket?.tournament?.name} — {isPreview ? 'Preview' : 'Bracket'} {isDoubleElim && '(Double Elim)'}
+          {bracket?.tournament?.name} — {isPreview ? 'Preview' : 'Bracket'} {isDoubleElim && '(Double Elim)'} {isRoundRobin && '(Round Robin)'}
         </h2>
         {isTeam && teamsToUse?.length > 0 && (
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
@@ -2005,17 +2007,15 @@ function App({ isCurrentPage = false }) {
   };
 
   const resetBracket = async () => {
-    if (!window.confirm('Reset bracket? This will delete the current bracket and create a fresh one from current participants/teams.')) return;
+    if (!window.confirm('Reset bracket? This will delete the current bracket. You will need to generate a new bracket when ready.')) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/regenerate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ use_manual_order: true, bracket_type: bracketType }),
+      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket`, {
+        method: 'DELETE',
       });
       const data = await parseJson(res);
-      if (!res.ok) throw new Error(data?.detail || 'Failed to regenerate');
+      if (!res.ok) throw new Error(data?.detail || 'Failed to reset');
       await fetchData({ silent: true });
     } catch (err) {
       setError(err.message);
@@ -2061,7 +2061,7 @@ function App({ isCurrentPage = false }) {
   };
 
   const regenerateTeams = async () => {
-    if (!window.confirm('Regenerate teams from participants + standby? This will replace all teams and regenerate the bracket.')) return;
+    if (!window.confirm('Regenerate teams from participants + standby? This will replace all teams and delete the bracket. Generate a new bracket when ready.')) return;
     setLoading(true);
     setError(null);
     try {
@@ -2578,6 +2578,7 @@ function App({ isCurrentPage = false }) {
                       <select value={bracketType} onChange={(e) => setBracketType(e.target.value)} style={{ padding: '8px 12px' }} title={bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
                         <option value="single_elim">Single elimination</option>
                         <option value="double_elim">Double elimination (8+ teams)</option>
+                        <option value="round_robin">Round robin</option>
                       </select>
                     </div>
                     {canEdit && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
@@ -2595,7 +2596,7 @@ function App({ isCurrentPage = false }) {
                 <div>
                   {canEdit && (
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
-                      <button onClick={resetBracket} disabled={loading || generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : 'Delete bracket and create a fresh one from current participants/teams'}>
+                      <button onClick={resetBracket} disabled={loading} title="Delete bracket and require regenerate">
                         Reset
                       </button>
                     </div>
@@ -2610,6 +2611,7 @@ function App({ isCurrentPage = false }) {
                     <select value={bracketType} onChange={(e) => setBracketType(e.target.value)} style={{ padding: '8px 12px' }}>
                       <option value="single_elim">Single elimination</option>
                       <option value="double_elim">Double elimination</option>
+                      <option value="round_robin">Round robin</option>
                     </select>
                     {canEdit && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>Generate Bracket</button>}
                   </div>

@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 
 from bot.checks import admin_only, mod_or_higher
-from bot.models import Player, Registration, Team, Tournament, TournamentSignupMessage
+from bot.models import Player, Registration, SiteSettings, Team, Tournament, TournamentSignupMessage
 from bot.models.base import get_async_session
 from bot.services.rl_api import RLAPIService
 import config

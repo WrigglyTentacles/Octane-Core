@@ -191,6 +191,41 @@ async def test_bracket_generate(client, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_round_robin_bracket_generate(client, auth_headers):
+    """Round robin bracket: everyone plays everyone once."""
+    r = await client.post(
+        "/api/tournaments",
+        json={"name": "Round Robin Test", "format": "1v1"},
+        headers=auth_headers,
+    )
+    tid = r.json()["id"]
+
+    for i in range(4):
+        await client.post(
+            f"/api/tournaments/{tid}/participants",
+            json={"display_name": f"Player{i+1}"},
+            headers=auth_headers,
+        )
+
+    r = await client.post(
+        f"/api/tournaments/{tid}/bracket/generate",
+        json={"use_manual_order": True, "bracket_type": "round_robin"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200
+    assert "ok" in r.json()
+
+    r = await client.get(f"/api/tournaments/{tid}/bracket")
+    assert r.status_code == 200
+    data = r.json()
+    assert "rounds" in data
+    assert data["bracket_type"] == "round_robin"
+    # 4 players: 3 rounds, 2 matches per round = 6 total matches
+    total_matches = sum(len(matches) for matches in data["rounds"].values())
+    assert total_matches == 6
+
+
+@pytest.mark.asyncio
 async def test_settings(client, auth_headers):
     """Settings GET is public, PATCH requires admin."""
     r = await client.get("/api/settings")
