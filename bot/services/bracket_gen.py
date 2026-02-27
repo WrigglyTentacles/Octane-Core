@@ -391,6 +391,22 @@ def _get_winner_entity(m: BracketMatch, is_team: bool) -> Optional[Tuple]:
     return None
 
 
+def _get_loser_entity(m: BracketMatch, is_team: bool) -> Optional[Tuple]:
+    """Get (entity, ...) tuple for the match loser, or None. Returns None for dropouts (one slot empty)."""
+    winner_entity = _get_winner_entity(m, is_team)
+    if not winner_entity:
+        return None
+    # Determine winner slot
+    if is_team:
+        winner_slot = 1 if m.winner_team_id == m.team1_id else 2
+    elif m.winner_manual_entry_id:
+        winner_slot = 1 if m.winner_manual_entry_id == m.manual_entry1_id else 2
+    else:
+        winner_slot = 1 if m.winner_player_id == m.player1_id else 2
+    loser_slot = 3 - winner_slot
+    return _get_entity_from_slot(m, loser_slot, is_team)
+
+
 async def advance_winner_to_parent(
     session: AsyncSession, match: BracketMatch, is_team: bool
 ) -> None:
@@ -408,24 +424,20 @@ async def advance_winner_to_parent(
         (match.winner_player_id, False, False)
     )
     _assign_entity_to_match(parent, match.parent_match_slot, entity, is_team)
-    has_s1 = bool(parent.team1_id or parent.player1_id or parent.manual_entry1_id)
-    has_s2 = bool(parent.team2_id or parent.player2_id or parent.manual_entry2_id)
-    if has_s1 and not has_s2:
-        if is_team:
-            parent.winner_team_id = parent.team1_id
-        elif parent.manual_entry1_id:
-            parent.winner_manual_entry_id = parent.manual_entry1_id
-        else:
-            parent.winner_player_id = parent.player1_id
-        await advance_winner_to_parent(session, parent, is_team)
-    elif has_s2 and not has_s1:
-        if is_team:
-            parent.winner_team_id = parent.team2_id
-        elif parent.manual_entry2_id:
-            parent.winner_manual_entry_id = parent.manual_entry2_id
-        else:
-            parent.winner_player_id = parent.player2_id
-        await advance_winner_to_parent(session, parent, is_team)
+    # Do NOT auto-advance parent when only one slot is filled. The other slot is
+    # waiting for another match; parent winner is set when both slots are filled.
+
+    # Seed losers bracket: when a winners match has a loser (both slots filled),
+    # assign the loser to the losers bracket match.
+    if match.loser_advances_to_match_id:
+        loser_entity = _get_loser_entity(match, is_team)
+        if loser_entity:
+            loser_match = await session.get(BracketMatch, match.loser_advances_to_match_id)
+            if loser_match:
+                _assign_entity_to_match(
+                    loser_match, match.loser_advances_to_slot, loser_entity, is_team
+                )
+                await session.flush()  # Ensure loser assignment is persisted
 
 
 async def advance_round_when_complete(

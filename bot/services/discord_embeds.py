@@ -214,7 +214,8 @@ async def get_champion_info(
         if m.bracket_section == "grand_finals":
             champ_match = m
             break
-    if not champ_match and champ_matches:
+    # For double_elim, champion is ONLY the grand finals winner; never fall back to winners bracket
+    if not champ_match and champ_matches and bracket.bracket_type != "double_elim":
         champ_match = max(champ_matches, key=lambda x: (x.round_num, x.match_num))
     if not champ_match:
         return None, None

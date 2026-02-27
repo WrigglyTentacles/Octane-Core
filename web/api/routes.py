@@ -1409,6 +1409,7 @@ def _champion_match_has_winner(
             return False
         return len(matches_with_winners) >= total_match_count
     if bracket_type == "double_elim":
+        # Champion is ONLY when grand finals (Winners final winner vs Losers final winner) has a winner
         for m in matches_with_winners:
             if m.bracket_section == "grand_finals":
                 return True
@@ -1448,6 +1449,23 @@ async def update_match(
         # Use exclude_unset to allow explicit null (e.g. clear slot when team drops out)
         updates = body.model_dump(exclude_unset=True)
         winner_updated = any(k in updates for k in ("winner_team_id", "winner_player_id", "winner_manual_entry_id"))
+        setting_winner = winner_updated and any(
+            updates.get(k) for k in ("winner_team_id", "winner_player_id", "winner_manual_entry_id")
+        )
+        if setting_winner and bracket.bracket_type == "round_robin":
+            # Round robin: only allow setting winner on matches in the current round (first round with unplayed)
+            all_matches_result = await session.execute(
+                select(BracketMatch).where(BracketMatch.bracket_id == bracket.id).order_by(BracketMatch.round_num, BracketMatch.match_num)
+            )
+            all_matches = list(all_matches_result.scalars().all())
+            unplayed = [m for m in all_matches if not (m.winner_team_id or m.winner_player_id or m.winner_manual_entry_id)]
+            if unplayed:
+                current_round_num = min(m.round_num for m in unplayed)
+                if match.round_num != current_round_num:
+                    raise HTTPException(
+                        400,
+                        f"Complete all matches in Round {current_round_num} before recording results for Round {match.round_num}.",
+                    )
         if winner_updated:
             # When setting a winner, clear the other winner fields to avoid conflicting data
             if "winner_team_id" not in updates:

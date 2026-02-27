@@ -535,13 +535,13 @@ function MatchSlot({ label, name, matchId, slot, onDrop, onSwapSlots, onAdvanceO
       >
         {slotContent}
       </div>
-      {name && name !== label && hasOpponent && onAdvanceOpponent && (
+      {name && name !== label && !hasOpponent && onAdvanceOpponent && (
         <button
-          onClick={() => onAdvanceOpponent(matchId, slot)}
-          title="Team dropped out — advance opponent"
-          style={{ padding: '6px 10px', fontSize: 11, whiteSpace: 'nowrap' }}
+          onClick={() => onAdvanceOpponent(matchId, slot === 1 ? 2 : 1)}
+          title="Opponent dropped — advance this team"
+          style={{ marginLeft: 8, fontSize: 10, padding: '2px 6px', flexShrink: 0 }}
         >
-          Advance
+          ✓
         </button>
       )}
     </div>
@@ -954,7 +954,7 @@ function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPrevi
   );
 }
 
-function BracketVisual({ rounds, isTeam, teams, isPreview, showChampion = true, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner }) {
+function BracketVisual({ rounds, isTeam, teams, isPreview, showChampion = true, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, restrictToCurrentRound = false }) {
   const roundEntries = Object.entries(rounds || {}).filter(([k]) => Number(k) < 10).sort((a, b) => Number(a[0]) - Number(b[0]));
   if (roundEntries.length === 0) return <p style={{ color: 'var(--text-muted)', padding: 24 }}>No matches to display.</p>;
 
@@ -964,6 +964,15 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, showChampion = true, 
   const colGap = 32;
 
   const lastRoundNum = roundEntries.length > 0 ? roundEntries[roundEntries.length - 1][0] : null;
+  const currentRoundNum = restrictToCurrentRound
+    ? (() => {
+        const firstWithUnplayed = roundEntries.find(([, ms]) =>
+          ms.some((m) => !m.winner_name && !m.winner_team_id && !m.winner_player_id && !m.winner_manual_entry_id)
+        );
+        return firstWithUnplayed ? Number(firstWithUnplayed[0]) : null;
+      })()
+    : null;
+
   const renderMatchBlock = (m, roundNum) => {
     const s1 = m.team1_name || m.player1_name || 'TBD';
     const s2 = m.team2_name || m.player2_name || 'TBD';
@@ -973,7 +982,8 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, showChampion = true, 
     const w1 = m.winner_name === s1;
     const w2 = m.winner_name === s2;
     const bothFilled = (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id);
-    const canSetWinner = bothFilled && !m.winner_name && !hasBye;
+    const inCurrentRound = currentRoundNum == null || Number(roundNum) === currentRoundNum;
+    const canSetWinner = bothFilled && !m.winner_name && !hasBye && inCurrentRound;
     const isChampion = showChampion && m.winner_name && String(roundNum) === String(lastRoundNum);
     return (
       <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 0, minWidth: colW }}>
@@ -1043,13 +1053,14 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, showChampion = true, 
   );
 }
 
-function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSwapWinner, onClearWinner }) {
-  const roundEntries = Object.entries(rounds || {}).filter(([k]) => Number(k) < 10).sort((a, b) => Number(a[0]) - Number(b[0]));
+function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, roundFilter, roundDisplayOffset = 0 }) {
+  const filter = roundFilter ?? ((k) => Number(k) < 10);
+  const roundEntries = Object.entries(rounds || {}).filter(([k]) => filter(k)).sort((a, b) => Number(a[0]) - Number(b[0]));
   if (roundEntries.length === 0) return <p style={{ color: 'var(--text-muted)', padding: 24 }}>No matches to display.</p>;
 
   const firstRoundMatches = roundEntries[0][1].length;
   const totalRows = Math.max(firstRoundMatches * 2, 4);
-  const rowHeight = 70;
+  const rowHeight = 90;
 
   const renderSlot = (m, slot, s, teamId) => (
     <div
@@ -1077,16 +1088,22 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
   const renderMatch = (m, rowSpan, colIdx) => {
     const s1 = m.team1_name || m.player1_name || 'TBD';
     const s2 = m.team2_name || m.player2_name || 'TBD';
+    const slot1Filled = !!(m.team1_id || m.manual_entry1_id || m.player1_id);
+    const slot2Filled = !!(m.team2_id || m.manual_entry2_id || m.player2_id);
+    const hasBye = (slot1Filled && !slot2Filled) || (slot2Filled && !slot1Filled);
+    const bothFilled = slot1Filled && slot2Filled;
+    const canSetWinner = bothFilled && !m.winner_name && !hasBye;
+    const w1 = m.winner_name === s1;
+    const w2 = m.winner_name === s2;
     const isEditable = !isPreview && onUpdateMatch;
     return (
       <div
         key={m.id}
         style={{
-          gridRow: `span ${rowSpan}`,
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'center',
-          minHeight: rowSpan * 52,
+          minHeight: rowSpan * 56,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
@@ -1098,13 +1115,16 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
               border: '1px solid var(--border)',
               position: 'relative',
               flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
             }}
           >
           {isEditable ? (
             <>
-              <MatchSlot label="Slot 1" name={s1} matchId={m.id} slot={1} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} teamId={m.team1_id} teams={teams} isTeam={isTeam} />
-              <span style={{ display: 'block', textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, margin: '4px 0' }}>vs</span>
-              <MatchSlot label="Slot 2" name={s2} matchId={m.id} slot={2} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} teamId={m.team2_id} teams={teams} isTeam={isTeam} />
+              <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teams} teamId={m.team1_id} isTeam={isTeam} isPreview={false} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={1} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} hasBye={hasBye} />
+              <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
+              <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teams} teamId={m.team2_id} isTeam={isTeam} isPreview={false} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={2} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} hasBye={hasBye} />
             </>
           ) : (
             <>
@@ -1135,6 +1155,9 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
               )}
             </div>
           )}
+          {canSetWinner && onSetWinner && (
+            <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>Click team to set winner</div>
+          )}
           </div>
         </div>
       </div>
@@ -1147,8 +1170,8 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
     display: 'grid',
     gridTemplateColumns: roundEntries.map(() => 'minmax(220px, 1fr)').join(' '),
     gridTemplateRows: `repeat(${rows}, ${rowHeight}px)`,
-    gap: '0 24px',
-    alignItems: 'center',
+    gap: '8px 24px',
+    alignItems: 'start',
     position: 'relative',
   };
 
@@ -1165,7 +1188,9 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
             gridRow: `${r + 1} / span ${rowSpan}`,
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'center',
             minHeight: rowSpan * rowHeight,
+            padding: '4px 0',
           }}
         >
           <div style={{ width: '100%' }}>{renderMatch(m, rowSpan, colIdx)}</div>
@@ -1182,7 +1207,7 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
       <div style={{ display: 'flex', gap: 24, marginTop: 12, fontSize: 12, color: 'var(--text-muted)' }}>
         {roundEntries.map(([r], i) => (
           <span key={r}>
-            Round {r}{i < roundEntries.length - 1 ? ' →' : ''}
+            Round {Number(r) + roundDisplayOffset}{i < roundEntries.length - 1 ? ' →' : ''}
           </span>
         ))}
       </div>
@@ -1205,7 +1230,9 @@ function enrichRoundsWithInferredWinners(rounds) {
       const slot1Filled = !!(copy.team1_id || copy.manual_entry1_id || copy.player1_id);
       const slot2Filled = !!(copy.team2_id || copy.manual_entry2_id || copy.player2_id);
       const hasBye = (slot1Filled && !slot2Filled) || (slot2Filled && !slot1Filled);
-      if (!copy.winner_name && hasBye) {
+      // Grand finals with one slot empty is waiting for losers bracket, NOT a bye — do not infer winner
+      const isGfWaiting = copy.bracket_section === 'grand_finals' && hasBye;
+      if (!copy.winner_name && hasBye && !isGfWaiting) {
         const teamName = s1 === 'BYE' ? s2 : s1;
         if (teamName && teamName !== 'TBD') {
           copy.winner_name = teamName;
@@ -1550,7 +1577,14 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
         {matches.map((m) => {
           const s1 = m.team1_name || m.player1_name || 'TBD';
           const s2 = m.team2_name || m.player2_name || 'TBD';
-          const hasOpponent = (m.team1_id || m.manual_entry1_id || m.player1_id) && (m.team2_id || m.manual_entry2_id || m.player2_id);
+          const slot1Filled = !!(m.team1_id || m.manual_entry1_id || m.player1_id);
+          const slot2Filled = !!(m.team2_id || m.manual_entry2_id || m.player2_id);
+          const hasBye = (slot1Filled && !slot2Filled) || (slot2Filled && !slot1Filled);
+          const bothFilled = slot1Filled && slot2Filled;
+          const hasOpponent = bothFilled;
+          const canSetWinner = bothFilled && !m.winner_name && !hasBye;
+          const w1 = m.winner_name === s1;
+          const w2 = m.winner_name === s2;
           return (
             <div key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
               <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 24, paddingTop: 16 }}>M{m.match_num}</span>
@@ -1568,9 +1602,9 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
                   </>
                 ) : (
                   <>
-                <MatchSlot label="Slot 1" name={s1} matchId={m.id} slot={1} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} teamId={m.team1_id} teams={teamsToUse} isTeam={isTeam} />
+                <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teamsToUse} teamId={m.team1_id} isTeam={isTeam} isPreview={false} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} matchId={m.id} slot={1} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} onSetWinner={canEdit ? onSetWinner : null} hasOpponent={slot2Filled} canSetWinner={canSetWinner} canEdit={!!canEdit} hasBye={hasBye} />
                 <span style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>vs</span>
-                <MatchSlot label="Slot 2" name={s2} matchId={m.id} slot={2} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} teamId={m.team2_id} teams={teamsToUse} isTeam={isTeam} />
+                <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teamsToUse} teamId={m.team2_id} isTeam={isTeam} isPreview={false} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} matchId={m.id} slot={2} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} onSetWinner={canEdit ? onSetWinner : null} hasOpponent={slot1Filled} canSetWinner={canSetWinner} canEdit={!!canEdit} hasBye={hasBye} />
                   </>
                 )}
                 {m.winner_name && (
@@ -1638,6 +1672,7 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
         teams={teamsToUse}
         isPreview={isPreview}
         showChampion={!isRoundRobin}
+        restrictToCurrentRound={isRoundRobin && !isPreview}
         onUpdateMatch={canEdit ? onUpdateMatch : null}
         onSwapSlots={canEdit ? onSwapSlots : null}
         onAdvanceOpponent={canEdit ? onAdvanceOpponent : null}
@@ -1658,13 +1693,11 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
         <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
           <div>
             <h3 style={{ margin: '0 0 16px', color: 'var(--accent)', fontSize: 16 }}>Winners Bracket</h3>
-            <BracketTree rounds={Object.fromEntries(Object.entries(wByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
+            <BracketTree rounds={Object.fromEntries(Object.entries(wByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 24 }}>
             <h3 style={{ margin: '0 0 16px', color: 'var(--accent)', fontSize: 16 }}>Losers Bracket</h3>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24 }}>
-              {Object.entries(lByRound).sort((a, b) => a[0] - b[0]).map(([r, ms]) => renderRound(Number(r), ms, 'Losers'))}
-            </div>
+            <BracketTree rounds={Object.fromEntries(Object.entries(lByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFilter={() => true} roundDisplayOffset={-10} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
           </div>
           {bySection.grand_finals.length > 0 && (
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 24 }}>
