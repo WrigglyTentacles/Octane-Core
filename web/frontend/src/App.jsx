@@ -2029,12 +2029,18 @@ function App({ isCurrentPage = false }) {
     setPostDiscordLoading(type);
     setError(null);
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/post-${type}`, {
+      const url = type === 'signup'
+        ? `${API}/tournaments/${tournamentId}/post-signup`
+        : `${API}/tournaments/${tournamentId}/bracket/post-${type}`;
+      const res = await authFetch(url, {
         method: 'POST',
+        headers: type === 'signup' ? { 'Content-Type': 'application/json' } : undefined,
+        body: type === 'signup' ? JSON.stringify({}) : undefined,
       });
       const data = await parseJson(res);
       if (!res.ok) throw new Error(data?.detail || data?.error || `Failed to post ${type}`);
-      setCopyFeedback(`Posted ${type} to Discord`);
+      const label = type === 'signup' ? 'tournament signup' : type;
+      setCopyFeedback(`Posted ${label} to Discord`);
       setTimeout(() => setCopyFeedback(null), 2000);
     } catch (err) {
       setError(err.message);
@@ -2615,18 +2621,22 @@ function App({ isCurrentPage = false }) {
                 <div>
                   {canEdit && (
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
-                      <button onClick={resetBracket} disabled={loading} title="Delete bracket and require regenerate">
+                      <button className="btn-danger" onClick={resetBracket} disabled={loading} title="Delete bracket and require regenerate">
                         Reset
                       </button>
-                      <span style={{ color: 'var(--text-muted)', marginRight: 4 }}>|</span>
-                      <button onClick={() => postToDiscord('teams')} disabled={!!postDiscordLoading} title="Post teams/participants to Discord bracket channel">
+                      <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>|</span>
+                      <button className="btn-accent" onClick={() => postToDiscord('teams')} disabled={!!postDiscordLoading} title="Post teams/participants to Discord bracket channel">
                         {postDiscordLoading === 'teams' ? 'Posting…' : 'Post Teams'}
                       </button>
-                      <button onClick={() => postToDiscord('round')} disabled={!!postDiscordLoading} title="Post current round lineup to Discord">
+                      <button className="btn-accent" onClick={() => postToDiscord('round')} disabled={!!postDiscordLoading} title="Post current round lineup to Discord">
                         {postDiscordLoading === 'round' ? 'Posting…' : 'Post Round'}
                       </button>
-                      <button onClick={() => postToDiscord('results')} disabled={!!postDiscordLoading} title="Post tournament results to Discord (requires champion)">
+                      <button className="btn-accent" onClick={() => postToDiscord('results')} disabled={!!postDiscordLoading} title="Post tournament results to Discord (requires champion)">
                         {postDiscordLoading === 'results' ? 'Posting…' : 'Post Results'}
+                      </button>
+                      <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>|</span>
+                      <button className="btn-tournament" onClick={() => postToDiscord('signup')} disabled={!!postDiscordLoading} title="Post tournament signup message to Discord">
+                        {postDiscordLoading === 'signup' ? 'Posting…' : 'Post Tournament'}
                       </button>
                       {copyFeedback && <span style={{ color: 'var(--accent)', fontSize: 13 }}>{copyFeedback}</span>}
                     </div>

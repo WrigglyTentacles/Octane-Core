@@ -94,6 +94,40 @@ button.primary:hover:not(:disabled) {
   border-color: var(--accent-hover);
 }
 
+button.btn-danger {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+button.btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: #ef4444;
+}
+
+button.btn-accent {
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-color: rgba(147, 233, 190, 0.4);
+}
+
+button.btn-accent:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg-primary);
+  border-color: var(--accent);
+}
+
+button.btn-tournament {
+  background: rgba(96, 165, 250, 0.2);
+  color: #60a5fa;
+  border-color: rgba(96, 165, 250, 0.5);
+}
+
+button.btn-tournament:hover:not(:disabled) {
+  background: rgba(96, 165, 250, 0.3);
+  border-color: #60a5fa;
+}
+
 select {
   cursor: pointer;
   min-width: 100px;
