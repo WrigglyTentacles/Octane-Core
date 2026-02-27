@@ -1244,26 +1244,56 @@ function deriveSummaryFromBracket(bracket) {
     else current_round = { display_label: `Round ${roundNum}` };
   }
   const winCounts = {};
-  const winnerNames = {};
+  const entityNames = {};
+  const entityIds = {};
   for (const m of allMatches) {
-    if (!m.winner_name && !m.winner_team_id && !m.winner_player_id && !m.winner_manual_entry_id) continue;
-    const key = m.winner_team_id ? `team:${m.winner_team_id}` : (m.winner_player_id ? `player:${m.winner_player_id}` : `manual:${m.winner_manual_entry_id}`);
-    winCounts[key] = (winCounts[key] || 0) + 1;
-    winnerNames[key] = m.winner_name || winnerNames[key];
+    if (m.winner_team_id || m.winner_player_id || m.winner_manual_entry_id) {
+      const key = m.winner_team_id ? `team:${m.winner_team_id}` : (m.winner_player_id ? `player:${m.winner_player_id}` : `manual:${m.winner_manual_entry_id}`);
+      winCounts[key] = (winCounts[key] || 0) + 1;
+      entityNames[key] = m.winner_name || entityNames[key];
+      entityIds[key] = m.winner_team_id ?? m.winner_player_id ?? m.winner_manual_entry_id;
+    }
+    const addEntity = (id, type, name) => {
+      if (!id) return;
+      const key = `${type}:${id}`;
+      if (!(key in entityNames)) {
+        entityNames[key] = name || `Unknown (${id})`;
+        entityIds[key] = id;
+        winCounts[key] = winCounts[key] || 0;
+      }
+    };
+    addEntity(m.team1_id, 'team', m.team1_name);
+    addEntity(m.team2_id, 'team', m.team2_name);
+    addEntity(m.player1_id, 'player', m.player1_name);
+    addEntity(m.player2_id, 'player', m.player2_name);
+    addEntity(m.manual_entry1_id, 'manual', m.player1_name);
+    addEntity(m.manual_entry2_id, 'manual', m.player2_name);
   }
   let win_leader = null;
   if (Object.keys(winCounts).length > 0) {
     const leaderKey = Object.keys(winCounts).reduce((a, b) => (winCounts[a] >= winCounts[b] ? a : b));
-    win_leader = { name: winnerNames[leaderKey] || 'Unknown', wins: winCounts[leaderKey], entity_type: leaderKey.startsWith('team') ? 'team' : 'player' };
+    win_leader = { name: entityNames[leaderKey] || 'Unknown', wins: winCounts[leaderKey], entity_type: leaderKey.startsWith('team') ? 'team' : 'player' };
   }
-  return { current_round, win_leader, participant_credentials: [] };
+  let standings = null;
+  if (bracket.bracket_type === 'round_robin' && Object.keys(entityNames).length > 0) {
+    standings = Object.keys(entityNames).map((key) => ({
+      name: entityNames[key] || 'Unknown',
+      wins: winCounts[key] || 0,
+      entity_type: key.startsWith('team') ? 'team' : 'player',
+      entity_id: entityIds[key],
+    }));
+    standings.sort((a, b) => (b.wins !== a.wins ? b.wins - a.wins : (a.name || '').localeCompare(b.name || '')));
+  }
+  return { current_round, win_leader, participant_credentials: [], standings };
 }
 
 function BracketSummary({ summary, bracket, isTeam, compact }) {
   const effectiveSummary = summary || (bracket ? deriveSummaryFromBracket(bracket) : null);
   if (!effectiveSummary) return null;
-  const { current_round, win_leader, participant_credentials } = effectiveSummary;
+  const { current_round, win_leader, participant_credentials, standings } = effectiveSummary;
   const hasCreds = participant_credentials && participant_credentials.length > 0;
+  const isRoundRobin = bracket?.bracket_type === 'round_robin';
+  const showStandings = isRoundRobin && standings && standings.length > 0;
   return (
     <div
       style={{
@@ -1292,7 +1322,7 @@ function BracketSummary({ summary, bracket, isTeam, compact }) {
             {current_round.display_label}
           </span>
         )}
-        {win_leader && (
+        {showStandings ? null : win_leader && (
           <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Most wins: </span>
             <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{win_leader.name}</span>
@@ -1300,6 +1330,32 @@ function BracketSummary({ summary, bracket, isTeam, compact }) {
           </span>
         )}
       </div>
+      {showStandings && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
+            {isTeam ? 'Standings' : 'Player standings'}
+          </span>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'auto 1fr auto',
+              gap: '4px 16px',
+              alignItems: 'center',
+              fontSize: 13,
+            }}
+          >
+            {standings.map((s, i) => (
+              <React.Fragment key={`${s.entity_type}-${s.entity_id}`}>
+                <span style={{ color: 'var(--text-muted)', minWidth: 20 }}>{i + 1}.</span>
+                <span style={{ color: 'var(--text-primary)', fontWeight: i === 0 ? 600 : 400 }}>{s.name}</span>
+                <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                  {s.wins} {s.wins === 1 ? 'win' : 'wins'}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
       {hasCreds && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Past credentials</span>

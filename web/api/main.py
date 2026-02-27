@@ -301,10 +301,38 @@ async def get_bracket_summary(tournament_id: int):
                     "past_finalist": past_finalist,
                 })
 
+        # Round robin: standings = all participants with win counts, sorted by wins desc
+        standings = None
+        if bracket.bracket_type == "round_robin":
+            standings = []
+            for eid in entities_in_bracket:
+                etype, ekey = eid
+                display_name = None
+                if etype == "team":
+                    team = await session.get(Team, ekey)
+                    display_name = team.name if team else None
+                elif etype == "player":
+                    player = await session.get(Player, ekey)
+                    display_name = player_display_name(player, ekey) if player else None
+                else:
+                    entry = await session.get(TournamentManualEntry, ekey)
+                    display_name = entry.display_name if entry else None
+                if display_name is None:
+                    display_name = f"Unknown ({ekey})"
+                wins = win_counts.get(eid, 0)
+                standings.append({
+                    "name": display_name,
+                    "wins": wins,
+                    "entity_type": "team" if etype == "team" else "player",
+                    "entity_id": ekey,
+                })
+            standings.sort(key=lambda x: (-x["wins"], x["name"].lower()))
+
         return {
             "current_round": current_round,
             "win_leader": win_leader,
             "participant_credentials": participant_credentials,
+            "standings": standings,
         }
 
 
