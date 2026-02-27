@@ -313,7 +313,7 @@ async def build_teams_embed(
 
     embed = discord.Embed(
         title=title,
-        description="Assemble before round 1. Use `/bracket next` or `/bracket status` for your match.",
+        description="Assemble before round 1. Use `/bracket status` to check your match status.",
         color=discord.Color.green(),
     )
     embed.add_field(name=field_name, value="\n".join(lines), inline=False)
@@ -405,7 +405,7 @@ async def build_round_lineup_embed(
         title=title,
         description=(
             f"**Current round lineup** — teams facing each other this round.\n\n"
-            f"Use `/bracket next` or `/bracket status` for your match.\n"
+            f"Use `/bracket status` to check your match status.\n"
             f"Moderators: use `/bracket update` with match ID and winner slot (1 or 2) to record results."
         ),
         color=discord.Color.blue(),
