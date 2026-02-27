@@ -306,14 +306,15 @@ async def _handle_post_bracket(request: aiohttp.web.Request) -> aiohttp.web.Resp
             )
         is_team = t.format != "1v1"
         guild = bot.get_guild(guild_id)
-        embed = await build_round_lineup_embed(
+        result = await build_round_lineup_embed(
             session, t, bracket, is_team, guild, bot
         )
-        if not embed:
+        if not result:
             return aiohttp.web.json_response(
                 {"error": "All matches complete or no unplayed matches"},
                 status=400,
             )
+        embeds = result if isinstance(result, list) else [result]
 
         try:
             channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
@@ -327,14 +328,17 @@ async def _handle_post_bracket(request: aiohttp.web.Request) -> aiohttp.web.Resp
                 {"error": "Channel not found or wrong guild"}, status=400
             )
         try:
-            msg = await channel.send(embed=embed)
+            msg_ids = []
+            for embed in embeds:
+                msg = await channel.send(embed=embed)
+                msg_ids.append(msg.id)
         except Exception as e:
             logger.exception("Failed to post bracket")
             return aiohttp.web.json_response(
                 {"error": f"Failed to post: {e}. Check bot permissions."},
                 status=400,
             )
-        return aiohttp.web.json_response({"ok": True, "message_id": msg.id})
+        return aiohttp.web.json_response({"ok": True, "message_id": msg_ids[0] if msg_ids else None, "message_ids": msg_ids})
     return aiohttp.web.json_response({"error": "Internal error"}, status=500)
 
 

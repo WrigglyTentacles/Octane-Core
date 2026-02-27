@@ -610,18 +610,20 @@ async def bracket_post(
 
         is_team = t.format != "1v1"
         guild, client = interaction.guild, interaction.client
-        embed = await build_round_lineup_embed(
+        result = await build_round_lineup_embed(
             session, t, bracket, is_team, guild, client
         )
-        if not embed:
+        if not result:
             await interaction.followup.send(
                 f"All matches in **{t.name}** are complete. Tournament is finished!",
                 ephemeral=True,
             )
             return
 
+        embeds = result if isinstance(result, list) else [result]
         try:
-            await target_channel.send(embed=embed)
+            for embed in embeds:
+                await target_channel.send(embed=embed)
         except discord.Forbidden:
             await interaction.followup.send(
                 f"Missing Access: I can't post in {target_channel.mention}. "

@@ -1542,7 +1542,7 @@ async def update_match(
                     t.status = "completed"
             await session.commit()
             # Post to Discord when full round advances or champion declared (if Discord configured)
-            # Single elim: post only when a full round completed (round_advanced). Double elim: no round-based post.
+            # Single elim: post when a full round completed. Double elim: post when a round completes (Primary + Secondary if both ready).
             should_post = (
                 (champion_declared or (winner_updated and round_advanced))
                 and config.INTERNAL_API_SECRET

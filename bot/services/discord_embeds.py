@@ -344,8 +344,10 @@ async def build_round_lineup_embed(
     is_team: bool,
     guild: discord.Guild | None = None,
     client: discord.Client | None = None,
-) -> discord.Embed | None:
-    """Build Discord embed for current round lineup (same as /bracket post). Returns None if no unplayed matches."""
+) -> discord.Embed | list[discord.Embed] | None:
+    """Build Discord embed(s) for current round lineup (same as /bracket post).
+    Returns None if no unplayed matches. For double elim, may return multiple embeds when
+    both Primary Round N+1 and Secondary Round N are ready (e.g. after winners R1 completes)."""
     matches_result = await session.execute(
         select(BracketMatch)
         .where(BracketMatch.bracket_id == bracket.id)
@@ -375,42 +377,71 @@ async def build_round_lineup_embed(
         by_round.keys(),
         key=lambda k: (section_order.get(k[0], 0), k[1]),
     )
-    current_round_key = sorted_keys[0]
-    current_round_matches = by_round[current_round_key]
 
-    section, round_num = current_round_key
+    first_section, first_round = sorted_keys[0]
 
-    if section == "grand_finals":
-        title = f"🏆 Grand Finals — {t.name}"
-    elif section == "winners":
-        title = f"🏆 Primary Round {round_num} — {t.name}"
-    elif section == "losers":
-        display_round = round_num - 10 if round_num >= 10 else round_num
-        title = f"🏆 Secondary Round {display_round} — {t.name}"
-    else:
-        title = f"🏆 Round {round_num} — {t.name}"
+    # For double elim: when first unplayed is (losers, 11) and Primary R2 is already done,
+    # we already posted Secondary R1 with Primary R2 when R1 completed. Skip to avoid duplicate.
+    if (
+        bracket.bracket_type == "double_elim"
+        and first_section == "losers"
+        and first_round == 11
+        and ("winners", 2) not in by_round  # Primary R2 complete = we already posted Secondary R1
+    ):
+        return None
 
-    match_blocks = []
-    for m in sorted(current_round_matches, key=lambda x: x.match_num):
-        s1 = await resolve_match_slot(session, m, 1, is_team, guild, client)
-        s2 = await resolve_match_slot(session, m, 2, is_team, guild, client)
-        block = (
-            f"**R{m.round_num} M{m.match_num}** (ID: {m.id})\n"
-            f"Slot 1: {s1}\n"
-            f"Slot 2: {s2}"
+    # When winners R1 completes, post both Primary R2 and Secondary R1. Same for R2->R3+L2, etc.
+    # Only add paired losers round when first is winners (not when first is losers).
+    round_keys_to_build = [sorted_keys[0]]
+    if (
+        bracket.bracket_type == "double_elim"
+        and len(sorted_keys) > 1
+        and first_section == "winners"
+        and first_round >= 2
+    ):
+        losers_round = 9 + first_round  # 11 for W=2, 12 for W=3, etc.
+        if ("losers", losers_round) in by_round:
+            round_keys_to_build.append(("losers", losers_round))
+
+    async def _build_embed_for_round(section: str, round_num: int, matches: list) -> discord.Embed:
+        if section == "grand_finals":
+            title = f"🏆 Grand Finals — {t.name}"
+        elif section == "winners":
+            title = f"🏆 Primary Round {round_num} — {t.name}"
+        elif section == "losers":
+            display_round = round_num - 10 if round_num >= 10 else round_num
+            title = f"🏆 Secondary Round {display_round} — {t.name}"
+        else:
+            title = f"🏆 Round {round_num} — {t.name}"
+
+        match_blocks = []
+        for m in sorted(matches, key=lambda x: x.match_num):
+            s1 = await resolve_match_slot(session, m, 1, is_team, guild, client)
+            s2 = await resolve_match_slot(session, m, 2, is_team, guild, client)
+            block = (
+                f"**R{m.round_num} M{m.match_num}** (ID: {m.id})\n"
+                f"Slot 1: {s1}\n"
+                f"Slot 2: {s2}"
+            )
+            match_blocks.append(block)
+
+        embed = discord.Embed(
+            title=title,
+            description=(
+                f"**Current round lineup** — teams facing each other this round.\n\n"
+                f"Use `/bracket status` to check your match status.\n"
+                f"Moderators: use `/bracket update` with match ID and winner slot (1 or 2) to record results."
+            ),
+            color=discord.Color.blue(),
         )
-        match_blocks.append(block)
+        embed.add_field(name="Matches", value="\n\n".join(match_blocks), inline=False)
+        embed.set_footer(text=f"Tournament ID: {t.id}")
+        embed.timestamp = discord.utils.utcnow()
+        return embed
 
-    embed = discord.Embed(
-        title=title,
-        description=(
-            f"**Current round lineup** — teams facing each other this round.\n\n"
-            f"Use `/bracket status` to check your match status.\n"
-            f"Moderators: use `/bracket update` with match ID and winner slot (1 or 2) to record results."
-        ),
-        color=discord.Color.blue(),
-    )
-    embed.add_field(name="Matches", value="\n\n".join(match_blocks), inline=False)
-    embed.set_footer(text=f"Tournament ID: {t.id}")
-    embed.timestamp = discord.utils.utcnow()
-    return embed
+    embeds = []
+    for key in round_keys_to_build:
+        section, round_num = key
+        embeds.append(await _build_embed_for_round(section, round_num, by_round[key]))
+
+    return embeds[0] if len(embeds) == 1 else embeds
