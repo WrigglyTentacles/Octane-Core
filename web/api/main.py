@@ -205,6 +205,13 @@ async def get_bracket_summary(tournament_id: int):
         else:
             current_round = {"section": None, "round_num": None, "display_label": "Complete"}
 
+        # Match progress
+        matches_total = len(matches)
+        matches_played = sum(
+            1 for m in matches if m.winner_team_id or m.winner_player_id or m.winner_manual_entry_id
+        )
+        completion_pct = round(100 * matches_played / matches_total) if matches_total else 0
+
         # Win counts per entity
         win_counts = {}
         entity_names = {}
@@ -253,12 +260,56 @@ async def get_bracket_summary(tournament_id: int):
                     entities_in_bracket.add(("manual", m.manual_entry1_id))
                 if m.manual_entry2_id:
                     entities_in_bracket.add(("manual", m.manual_entry2_id))
+        participant_count = len(entities_in_bracket)
+
+        # Current round matches: all unplayed matches in the current round
+        current_round_matches = []
+        if unplayed and current_round:
+            section = current_round.get("section") or "main"
+            round_num = current_round.get("round_num")
+            if round_num is not None:
+                current_unplayed = [
+                    m for m in unplayed
+                    if (m.bracket_section or "main") == section and m.round_num == round_num
+                ]
+                for m in sorted(current_unplayed, key=lambda x: (x.match_num, x.id)):
+                    name1 = name2 = None
+                    if is_team:
+                        if m.team1_id:
+                            team = await session.get(Team, m.team1_id)
+                            name1 = team.name if team else f"Team {m.team1_id}"
+                        if m.team2_id:
+                            team = await session.get(Team, m.team2_id)
+                            name2 = team.name if team else f"Team {m.team2_id}"
+                    else:
+                        if m.player1_id:
+                            player = await session.get(Player, m.player1_id)
+                            name1 = player_display_name(player, m.player1_id) if player else str(m.player1_id)
+                        elif m.manual_entry1_id:
+                            entry = await session.get(TournamentManualEntry, m.manual_entry1_id)
+                            name1 = entry.display_name if entry else str(m.manual_entry1_id)
+                        if m.player2_id:
+                            player = await session.get(Player, m.player2_id)
+                            name2 = player_display_name(player, m.player2_id) if player else str(m.player2_id)
+                        elif m.manual_entry2_id:
+                            entry = await session.get(TournamentManualEntry, m.manual_entry2_id)
+                            name2 = entry.display_name if entry else str(m.manual_entry2_id)
+                    current_round_matches.append({
+                        "team1_name": name1 or "TBD",
+                        "team2_name": name2 or "TBD",
+                        "match_id": m.id,
+                        "match_num": m.match_num,
+                    })
         participant_credentials = []
         for eid in entities_in_bracket:
             etype, ekey = eid
             display_name = None
+            team = None
             if etype == "team":
-                team = await session.get(Team, ekey)
+                team_result = await session.execute(
+                    select(Team).where(Team.id == ekey).options(selectinload(Team.members))
+                )
+                team = team_result.scalar_one_or_none()
                 display_name = team.name if team else None
             elif etype == "player":
                 player = await session.get(Player, ekey)
@@ -274,7 +325,6 @@ async def get_bracket_summary(tournament_id: int):
                 if w["tournament_id"] == tournament_id:
                     continue
                 if etype == "team":
-                    team = await session.get(Team, ekey)
                     if not team:
                         continue
                     player_ids = [r.player_id for r in team.members if r.player_id]
@@ -301,9 +351,27 @@ async def get_bracket_summary(tournament_id: int):
                     "past_finalist": past_finalist,
                 })
 
-        # Round robin: standings = all participants with win counts, sorted by wins desc
+        # Round robin: standings = all participants with win counts, W-L, sorted by wins desc
         standings = None
         if bracket.bracket_type == "round_robin":
+            matches_played_per_entity = {}
+            for m in matches:
+                slots = []
+                if m.team1_id:
+                    slots.append(("team", m.team1_id))
+                if m.team2_id:
+                    slots.append(("team", m.team2_id))
+                if m.player1_id:
+                    slots.append(("player", m.player1_id))
+                if m.player2_id:
+                    slots.append(("player", m.player2_id))
+                if m.manual_entry1_id:
+                    slots.append(("manual", m.manual_entry1_id))
+                if m.manual_entry2_id:
+                    slots.append(("manual", m.manual_entry2_id))
+                for eid in slots:
+                    if eid in entities_in_bracket:
+                        matches_played_per_entity[eid] = matches_played_per_entity.get(eid, 0) + 1
             standings = []
             for eid in entities_in_bracket:
                 etype, ekey = eid
@@ -320,9 +388,13 @@ async def get_bracket_summary(tournament_id: int):
                 if display_name is None:
                     display_name = f"Unknown ({ekey})"
                 wins = win_counts.get(eid, 0)
+                mp = matches_played_per_entity.get(eid, 0)
+                losses = mp - wins
                 standings.append({
                     "name": display_name,
                     "wins": wins,
+                    "losses": losses,
+                    "matches_played": mp,
                     "entity_type": "team" if etype == "team" else "player",
                     "entity_id": ekey,
                 })
@@ -333,6 +405,11 @@ async def get_bracket_summary(tournament_id: int):
             "win_leader": win_leader,
             "participant_credentials": participant_credentials,
             "standings": standings,
+            "matches_played": matches_played,
+            "matches_total": matches_total,
+            "completion_pct": completion_pct,
+            "participant_count": participant_count,
+            "current_round_matches": current_round_matches,
         }
 
 
@@ -370,7 +447,10 @@ async def _fetch_winners_with_ids(session: AsyncSession):
             continue
         row = {"tournament_id": t.id, "tournament_name": t.name}
         if champ_match.winner_team_id:
-            team = await session.get(Team, champ_match.winner_team_id)
+            team_result = await session.execute(
+                select(Team).where(Team.id == champ_match.winner_team_id).options(selectinload(Team.members))
+            )
+            team = team_result.scalar_one_or_none()
             if team:
                 row["winner_player_ids"] = [r.player_id for r in team.members if r.player_id]
         elif champ_match.winner_player_id:
@@ -381,7 +461,10 @@ async def _fetch_winners_with_ids(session: AsyncSession):
         if champ_match.winner_team_id:
             fid = champ_match.team2_id if champ_match.winner_team_id == champ_match.team1_id else champ_match.team1_id
             if fid:
-                ft = await session.get(Team, fid)
+                ft_result = await session.execute(
+                    select(Team).where(Team.id == fid).options(selectinload(Team.members))
+                )
+                ft = ft_result.scalar_one_or_none()
                 if ft:
                     row["finalist_player_ids"] = [r.player_id for r in ft.members if r.player_id]
         elif champ_match.winner_player_id:

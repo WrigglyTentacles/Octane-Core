@@ -1234,14 +1234,14 @@ function deriveSummaryFromBracket(bracket) {
   if (!bracket?.rounds || typeof bracket.rounds !== 'object') return null;
   const allMatches = Object.values(bracket.rounds).flat();
   const unplayed = allMatches.filter((m) => !m.winner_name && !m.winner_team_id && !m.winner_player_id && !m.winner_manual_entry_id);
-  let current_round = { display_label: 'Complete' };
+  let current_round = { display_label: 'Complete', section: null, round_num: null };
   if (unplayed.length > 0) {
     const section = unplayed[0].bracket_section || 'main';
     const roundNum = unplayed[0].round_num;
-    if (section === 'grand_finals') current_round = { display_label: 'Grand Finals' };
-    else if (section === 'winners') current_round = { display_label: `Primary Round ${roundNum}` };
-    else if (section === 'losers') current_round = { display_label: `Secondary Round ${roundNum >= 10 ? roundNum - 10 : roundNum}` };
-    else current_round = { display_label: `Round ${roundNum}` };
+    if (section === 'grand_finals') current_round = { display_label: 'Grand Finals', section, round_num: roundNum };
+    else if (section === 'winners') current_round = { display_label: `Primary Round ${roundNum}`, section, round_num: roundNum };
+    else if (section === 'losers') current_round = { display_label: `Secondary Round ${roundNum >= 10 ? roundNum - 10 : roundNum}`, section, round_num: roundNum };
+    else current_round = { display_label: `Round ${roundNum}`, section, round_num: roundNum };
   }
   const winCounts = {};
   const entityNames = {};
@@ -1275,25 +1275,94 @@ function deriveSummaryFromBracket(bracket) {
     win_leader = { name: entityNames[leaderKey] || 'Unknown', wins: winCounts[leaderKey], entity_type: leaderKey.startsWith('team') ? 'team' : 'player' };
   }
   let standings = null;
+  const matchesTotal = allMatches.length;
+  const matchesPlayed = allMatches.filter((m) => m.winner_team_id || m.winner_player_id || m.winner_manual_entry_id).length;
+  const completionPct = matchesTotal ? Math.round(100 * matchesPlayed / matchesTotal) : 0;
+  const participantCount = Object.keys(entityNames).length;
+  let current_round_matches = [];
+  if (unplayed.length > 0 && current_round.section != null && current_round.round_num != null) {
+    const section = current_round.section || 'main';
+    const roundNum = current_round.round_num;
+    const currentUnplayed = unplayed.filter(
+      (m) => (m.bracket_section || 'main') === section && m.round_num === roundNum
+    );
+    current_round_matches = currentUnplayed
+      .sort((a, b) => (a.match_num || 0) - (b.match_num || 0) || (a.id || 0) - (b.id || 0))
+      .map((m) => ({
+        team1_name: m.team1_name || m.player1_name || 'TBD',
+        team2_name: m.team2_name || m.player2_name || 'TBD',
+        match_id: m.id,
+        match_num: m.match_num,
+      }));
+  }
   if (bracket.bracket_type === 'round_robin' && Object.keys(entityNames).length > 0) {
-    standings = Object.keys(entityNames).map((key) => ({
-      name: entityNames[key] || 'Unknown',
-      wins: winCounts[key] || 0,
-      entity_type: key.startsWith('team') ? 'team' : 'player',
-      entity_id: entityIds[key],
-    }));
+    const matchesPlayedPerEntity = {};
+    for (const m of allMatches) {
+      const add = (id, type) => {
+        if (!id) return;
+        const key = `${type}:${id}`;
+        if (key in entityNames) matchesPlayedPerEntity[key] = (matchesPlayedPerEntity[key] || 0) + 1;
+      };
+      add(m.team1_id, 'team');
+      add(m.team2_id, 'team');
+      add(m.player1_id, 'player');
+      add(m.player2_id, 'player');
+      add(m.manual_entry1_id, 'manual');
+      add(m.manual_entry2_id, 'manual');
+    }
+    standings = Object.keys(entityNames).map((key) => {
+      const wins = winCounts[key] || 0;
+      const mp = matchesPlayedPerEntity[key] || 0;
+      return {
+        name: entityNames[key] || 'Unknown',
+        wins,
+        losses: mp - wins,
+        matches_played: mp,
+        entity_type: key.startsWith('team') ? 'team' : 'player',
+        entity_id: entityIds[key],
+      };
+    });
     standings.sort((a, b) => (b.wins !== a.wins ? b.wins - a.wins : (a.name || '').localeCompare(b.name || '')));
   }
-  return { current_round, win_leader, participant_credentials: [], standings };
+  return {
+    current_round,
+    win_leader,
+    participant_credentials: [],
+    standings,
+    matches_played: matchesPlayed,
+    matches_total: matchesTotal,
+    completion_pct: completionPct,
+    participant_count: participantCount,
+    current_round_matches: current_round_matches,
+  };
 }
+
+const STANDINGS_COLLAPSE_THRESHOLD = 8;
 
 function BracketSummary({ summary, bracket, isTeam, compact }) {
   const effectiveSummary = summary || (bracket ? deriveSummaryFromBracket(bracket) : null);
   if (!effectiveSummary) return null;
-  const { current_round, win_leader, participant_credentials, standings } = effectiveSummary;
+  const {
+    current_round,
+    win_leader,
+    participant_credentials,
+    standings,
+    matches_played,
+    matches_total,
+    completion_pct,
+    participant_count,
+    current_round_matches,
+  } = effectiveSummary;
   const hasCreds = participant_credentials && participant_credentials.length > 0;
   const isRoundRobin = bracket?.bracket_type === 'round_robin';
   const showStandings = isRoundRobin && standings && standings.length > 0;
+  const isComplete = current_round?.display_label === 'Complete';
+  const [standingsExpanded, setStandingsExpanded] = useState(false);
+  const shouldCollapseStandings = showStandings && standings.length > STANDINGS_COLLAPSE_THRESHOLD;
+  const displayedStandings = shouldCollapseStandings && !standingsExpanded
+    ? standings.slice(0, 5)
+    : standings;
+
   return (
     <div
       style={{
@@ -1308,6 +1377,19 @@ function BracketSummary({ summary, bracket, isTeam, compact }) {
       }}
     >
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+        {participant_count != null && participant_count > 0 && (
+          <span style={{ fontSize: 14, color: 'var(--text-muted)' }}>
+            {participant_count} {isTeam ? 'teams' : 'players'}
+          </span>
+        )}
+        {matches_total != null && matches_total > 0 && (
+          <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+            {matches_played} of {matches_total} matches
+            {completion_pct != null && completion_pct < 100 && (
+              <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>({completion_pct}%)</span>
+            )}
+          </span>
+        )}
         {current_round?.display_label && (
           <span
             style={{
@@ -1322,7 +1404,21 @@ function BracketSummary({ summary, bracket, isTeam, compact }) {
             {current_round.display_label}
           </span>
         )}
-        {showStandings ? null : win_leader && (
+        {isComplete && win_leader && (
+          <span
+            style={{
+              background: 'var(--success-muted, rgba(34, 197, 94, 0.15))',
+              color: 'var(--success, #22c55e)',
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: 14,
+              fontWeight: 700,
+            }}
+          >
+            Champion: {win_leader.name}
+          </span>
+        )}
+        {!showStandings && !isComplete && win_leader && (
           <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Most wins: </span>
             <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{win_leader.name}</span>
@@ -1330,6 +1426,18 @@ function BracketSummary({ summary, bracket, isTeam, compact }) {
           </span>
         )}
       </div>
+      {!isComplete && current_round_matches && current_round_matches.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Up next</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {current_round_matches.map((m, i) => (
+              <span key={m.match_id || i} style={{ fontSize: 14, color: 'var(--text-primary)' }}>
+                {m.team1_name} vs {m.team2_name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       {showStandings && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
@@ -1344,16 +1452,36 @@ function BracketSummary({ summary, bracket, isTeam, compact }) {
               fontSize: 13,
             }}
           >
-            {standings.map((s, i) => (
-              <React.Fragment key={`${s.entity_type}-${s.entity_id}`}>
-                <span style={{ color: 'var(--text-muted)', minWidth: 20 }}>{i + 1}.</span>
-                <span style={{ color: 'var(--text-primary)', fontWeight: i === 0 ? 600 : 400 }}>{s.name}</span>
-                <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
-                  {s.wins} {s.wins === 1 ? 'win' : 'wins'}
-                </span>
-              </React.Fragment>
-            ))}
+            {(displayedStandings || []).map((s, i) => {
+              const isPodium = i < 3;
+              const podiumStyle = i === 0 ? { color: 'var(--accent)', fontWeight: 700 } : i === 1 ? { color: 'var(--text-primary)', fontWeight: 600 } : i === 2 ? { color: 'var(--text-secondary)', fontWeight: 500 } : {};
+              const wl = s.losses != null ? `${s.wins}-${s.losses}` : `${s.wins} W`;
+              return (
+                <React.Fragment key={`${s.entity_type}-${s.entity_id}`}>
+                  <span style={{ color: 'var(--text-muted)', minWidth: 20 }}>{i + 1}.</span>
+                  <span style={{ color: 'var(--text-primary)', ...(isPodium ? podiumStyle : {}) }}>{s.name}</span>
+                  <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{wl}</span>
+                </React.Fragment>
+              );
+            })}
           </div>
+          {shouldCollapseStandings && !standingsExpanded && (
+            <button
+              type="button"
+              onClick={() => setStandingsExpanded(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--accent)',
+                fontSize: 12,
+                cursor: 'pointer',
+                padding: 4,
+                alignSelf: 'flex-start',
+              }}
+            >
+              Show all {standings.length} {isTeam ? 'teams' : 'players'}
+            </button>
+          )}
         </div>
       )}
       {hasCreds && (
@@ -2814,10 +2942,6 @@ function App({ isCurrentPage = false }) {
                       </button>
                       <button className="btn-accent" onClick={() => postToDiscord('results')} disabled={!!postDiscordLoading} title="Post tournament results to Discord (requires champion)">
                         {postDiscordLoading === 'results' ? 'Posting…' : 'Post Results'}
-                      </button>
-                      <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>|</span>
-                      <button className="btn-tournament" onClick={() => postToDiscord('signup')} disabled={!!postDiscordLoading} title="Post tournament signup message to Discord">
-                        {postDiscordLoading === 'signup' ? 'Posting…' : 'Post Tournament'}
                       </button>
                       {copyFeedback && <span style={{ color: 'var(--accent)', fontSize: 13 }}>{copyFeedback}</span>}
                     </div>
