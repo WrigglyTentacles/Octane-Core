@@ -821,7 +821,13 @@ async def list_winners():
                 continue
             winner_name = None
             winner_players = None  # List of player names for team formats
+            winner_player_id = None
+            winner_team_id = None
+            winner_player_ids = None  # For team members (Discord IDs)
+            winner_manual_entry_id = None
+            winner_display_name = None  # For manual entry matching
             if champ_match.winner_team_id:
+                winner_team_id = champ_match.winner_team_id
                 team_result = await session.execute(
                     select(Team)
                     .where(Team.id == champ_match.winner_team_id)
@@ -834,20 +840,69 @@ async def list_winners():
                 if team:
                     winner_name = team.name
                     player_names = []
+                    player_ids = []
                     for reg in team.members:
                         if reg.player:
                             player_names.append(player_display_name(reg.player, reg.player_id))
+                            player_ids.append(reg.player_id)
                     for tmm in sorted(team.manual_members, key=lambda x: x.sort_order):
                         if tmm.manual_entry:
                             player_names.append(tmm.manual_entry.display_name)
                     if player_names:
                         winner_players = player_names
+                    if player_ids:
+                        winner_player_ids = player_ids
             elif champ_match.winner_player_id:
+                winner_player_id = champ_match.winner_player_id
                 player = await session.get(Player, champ_match.winner_player_id)
                 winner_name = player_display_name(player, champ_match.winner_player_id) if player else None
             elif champ_match.winner_manual_entry_id:
+                winner_manual_entry_id = champ_match.winner_manual_entry_id
                 entry = await session.get(TournamentManualEntry, champ_match.winner_manual_entry_id)
                 winner_name = entry.display_name if entry else None
+                winner_display_name = winner_name
+            # Compute finalist (loser of the final match)
+            finalist_player_id = None
+            finalist_team_id = None
+            finalist_player_ids = None
+            finalist_manual_entry_id = None
+            finalist_display_name = None
+            finalist_name = None
+            if champ_match.winner_team_id:
+                # Winner is team1 or team2; finalist is the other team
+                finalist_team_id = champ_match.team2_id if champ_match.winner_team_id == champ_match.team1_id else champ_match.team1_id
+                if finalist_team_id:
+                    ft_result = await session.execute(
+                        select(Team)
+                        .where(Team.id == finalist_team_id)
+                        .options(
+                            selectinload(Team.members).selectinload(Registration.player),
+                        )
+                    )
+                    ft = ft_result.scalar_one_or_none()
+                    if ft:
+                        finalist_name = ft.name
+                        finalist_player_ids = [r.player_id for r in ft.members if r.player_id]
+            elif champ_match.winner_player_id:
+                # Finalist is the other player
+                finalist_player_id = champ_match.player2_id if champ_match.winner_player_id == champ_match.player1_id else champ_match.player1_id
+                if finalist_player_id:
+                    fp = await session.get(Player, finalist_player_id)
+                    finalist_name = player_display_name(fp, finalist_player_id) if fp else None
+                else:
+                    fe_id = champ_match.manual_entry2_id if champ_match.winner_player_id == champ_match.player1_id else champ_match.manual_entry1_id
+                    if fe_id:
+                        fe = await session.get(TournamentManualEntry, fe_id)
+                        finalist_manual_entry_id = fe_id
+                        finalist_display_name = fe.display_name if fe else None
+                        finalist_name = finalist_display_name
+            elif champ_match.winner_manual_entry_id:
+                fe_id = champ_match.manual_entry1_id if champ_match.winner_manual_entry_id == champ_match.manual_entry2_id else champ_match.manual_entry2_id
+                if fe_id:
+                    fe = await session.get(TournamentManualEntry, fe_id)
+                    finalist_manual_entry_id = fe_id
+                    finalist_display_name = fe.display_name if fe else None
+                    finalist_name = finalist_display_name
             if winner_name:
                 row = {
                     "tournament_id": t.id,
@@ -858,6 +913,28 @@ async def list_winners():
                 }
                 if winner_players is not None:
                     row["winner_players"] = winner_players
+                if winner_player_id is not None:
+                    row["winner_player_id"] = winner_player_id
+                if winner_team_id is not None:
+                    row["winner_team_id"] = winner_team_id
+                if winner_player_ids is not None:
+                    row["winner_player_ids"] = winner_player_ids
+                if winner_manual_entry_id is not None:
+                    row["winner_manual_entry_id"] = winner_manual_entry_id
+                if winner_display_name is not None:
+                    row["winner_display_name"] = winner_display_name
+                if finalist_name is not None:
+                    row["finalist_name"] = finalist_name
+                if finalist_player_id is not None:
+                    row["finalist_player_id"] = finalist_player_id
+                if finalist_team_id is not None:
+                    row["finalist_team_id"] = finalist_team_id
+                if finalist_player_ids is not None:
+                    row["finalist_player_ids"] = finalist_player_ids
+                if finalist_manual_entry_id is not None:
+                    row["finalist_manual_entry_id"] = finalist_manual_entry_id
+                if finalist_display_name is not None:
+                    row["finalist_display_name"] = finalist_display_name
                 winners.append(row)
         return winners
 
@@ -1318,11 +1395,19 @@ async def swap_match_winner_route(
 
 
 def _champion_match_has_winner(
-    matches_with_winners: list, bracket_type: str, max_round_single_elim: int | None = None
+    matches_with_winners: list,
+    bracket_type: str,
+    max_round_single_elim: int | None = None,
+    total_match_count: int | None = None,
 ) -> bool:
-    """True if the champion (final) match has a winner set. For single elim, max_round_single_elim must be the actual final round in the bracket (not just the max among matches with winners)."""
+    """True if the champion (final) match has a winner set. For round_robin, requires ALL matches complete."""
     if not matches_with_winners:
         return False
+    if bracket_type == "round_robin":
+        # Round robin: champion only when ALL matches have been played (whole bracket complete)
+        if total_match_count is None:
+            return False
+        return len(matches_with_winners) >= total_match_count
     if bracket_type == "double_elim":
         for m in matches_with_winners:
             if m.bracket_section == "grand_finals":
@@ -1418,6 +1503,7 @@ async def update_match(
                 )
                 champ_matches = champ_matches_result.scalars().all()
                 max_round = None
+                total_match_count = None
                 if bracket.bracket_type == "single_elim":
                     max_r = await session.execute(
                         select(func.max(BracketMatch.round_num)).where(
@@ -1426,7 +1512,14 @@ async def update_match(
                         )
                     )
                     max_round = max_r.scalar() or 0
-                champion_declared = _champion_match_has_winner(champ_matches, bracket.bracket_type, max_round)
+                elif bracket.bracket_type == "round_robin":
+                    count_r = await session.execute(
+                        select(func.count(BracketMatch.id)).where(BracketMatch.bracket_id == bracket.id)
+                    )
+                    total_match_count = count_r.scalar() or 0
+                champion_declared = _champion_match_has_winner(
+                    champ_matches, bracket.bracket_type, max_round, total_match_count
+                )
                 if champion_declared:
                     t.status = "completed"
             await session.commit()

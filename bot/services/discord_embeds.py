@@ -1,6 +1,8 @@
 """Shared Discord embed-building and entity resolution for bracket displays."""
 from __future__ import annotations
 
+from collections import Counter
+
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -114,10 +116,15 @@ def champion_match_has_winner(
     matches_with_winners: list,
     bracket_type: str,
     max_round_single_elim: int | None = None,
+    total_match_count: int | None = None,
 ) -> bool:
     """True if the champion (final) match has a winner set."""
     if not matches_with_winners:
         return False
+    if bracket_type == "round_robin":
+        if total_match_count is None or total_match_count <= 0:
+            return False
+        return len(matches_with_winners) >= total_match_count
     if bracket_type == "double_elim":
         return any(m.bracket_section == "grand_finals" for m in matches_with_winners)
     single_elim = [m for m in matches_with_winners if m.bracket_section is None]
@@ -129,6 +136,17 @@ def champion_match_has_winner(
         else max(m.round_num for m in single_elim)
     )
     return any(m.round_num == final_round for m in single_elim)
+
+
+def _entity_key(match: BracketMatch) -> tuple:
+    """Return a unique key for the winner entity of a match."""
+    if match.winner_team_id:
+        return ("team", match.winner_team_id)
+    if match.winner_player_id:
+        return ("player", match.winner_player_id)
+    if match.winner_manual_entry_id:
+        return ("manual", match.winner_manual_entry_id)
+    return (None, 0)
 
 
 async def get_champion_info(
@@ -151,6 +169,46 @@ async def get_champion_info(
         )
     )
     champ_matches = result.scalars().all()
+    if bracket.bracket_type == "round_robin":
+        # Round robin: champion is the entity with the most wins
+        wins: Counter = Counter()
+        for m in champ_matches:
+            k = _entity_key(m)
+            if k[0] is not None:
+                wins[k] += 1
+        if not wins:
+            return None, None
+        top_key, _ = wins.most_common(1)[0]
+        kind, entity_id = top_key
+        if kind == "team":
+            team_result = await session.execute(
+                select(Team)
+                .where(Team.id == entity_id)
+                .options(
+                    selectinload(Team.members).selectinload(Registration.player),
+                    selectinload(Team.manual_members).selectinload(TeamManualMember.manual_entry),
+                )
+            )
+            team = team_result.scalar_one_or_none()
+            if team:
+                name = team.name
+                members = []
+                for reg in team.members:
+                    if reg.player:
+                        members.append(
+                            await resolve_entity(session, reg.player_id, False, guild, client)
+                        )
+                for tmm in sorted(team.manual_members, key=lambda x: x.sort_order):
+                    if tmm.manual_entry:
+                        members.append(tmm.manual_entry.display_name)
+                return name, members if members else None
+        elif kind == "player":
+            name = await resolve_entity(session, entity_id, False, guild, client)
+            return name, None
+        elif kind == "manual":
+            entry = await session.get(TournamentManualEntry, entity_id)
+            return (entry.display_name if entry else "—"), None
+        return None, None
     champ_match = None
     for m in champ_matches:
         if m.bracket_section == "grand_finals":

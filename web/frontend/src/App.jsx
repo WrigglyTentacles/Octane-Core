@@ -1229,6 +1229,114 @@ function enrichRoundsWithInferredWinners(rounds) {
   return enriched;
 }
 
+/** Derive minimal summary from bracket when API summary is missing (e.g. 1v1 or fetch failed). */
+function deriveSummaryFromBracket(bracket) {
+  if (!bracket?.rounds || typeof bracket.rounds !== 'object') return null;
+  const allMatches = Object.values(bracket.rounds).flat();
+  const unplayed = allMatches.filter((m) => !m.winner_name && !m.winner_team_id && !m.winner_player_id && !m.winner_manual_entry_id);
+  let current_round = { display_label: 'Complete' };
+  if (unplayed.length > 0) {
+    const section = unplayed[0].bracket_section || 'main';
+    const roundNum = unplayed[0].round_num;
+    if (section === 'grand_finals') current_round = { display_label: 'Grand Finals' };
+    else if (section === 'winners') current_round = { display_label: `Primary Round ${roundNum}` };
+    else if (section === 'losers') current_round = { display_label: `Secondary Round ${roundNum >= 10 ? roundNum - 10 : roundNum}` };
+    else current_round = { display_label: `Round ${roundNum}` };
+  }
+  const winCounts = {};
+  const winnerNames = {};
+  for (const m of allMatches) {
+    if (!m.winner_name && !m.winner_team_id && !m.winner_player_id && !m.winner_manual_entry_id) continue;
+    const key = m.winner_team_id ? `team:${m.winner_team_id}` : (m.winner_player_id ? `player:${m.winner_player_id}` : `manual:${m.winner_manual_entry_id}`);
+    winCounts[key] = (winCounts[key] || 0) + 1;
+    winnerNames[key] = m.winner_name || winnerNames[key];
+  }
+  let win_leader = null;
+  if (Object.keys(winCounts).length > 0) {
+    const leaderKey = Object.keys(winCounts).reduce((a, b) => (winCounts[a] >= winCounts[b] ? a : b));
+    win_leader = { name: winnerNames[leaderKey] || 'Unknown', wins: winCounts[leaderKey], entity_type: leaderKey.startsWith('team') ? 'team' : 'player' };
+  }
+  return { current_round, win_leader, participant_credentials: [] };
+}
+
+function BracketSummary({ summary, bracket, isTeam, compact }) {
+  const effectiveSummary = summary || (bracket ? deriveSummaryFromBracket(bracket) : null);
+  if (!effectiveSummary) return null;
+  const { current_round, win_leader, participant_credentials } = effectiveSummary;
+  const hasCreds = participant_credentials && participant_credentials.length > 0;
+  return (
+    <div
+      style={{
+        background: 'var(--bg-secondary)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        padding: compact ? 12 : 16,
+        marginBottom: 20,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: compact ? 10 : 14,
+      }}
+    >
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+        {current_round?.display_label && (
+          <span
+            style={{
+              background: 'var(--accent-muted)',
+              color: 'var(--accent)',
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          >
+            {current_round.display_label}
+          </span>
+        )}
+        {win_leader && (
+          <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Most wins: </span>
+            <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{win_leader.name}</span>
+            <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>({win_leader.wins})</span>
+          </span>
+        )}
+      </div>
+      {hasCreds && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Past credentials</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {participant_credentials.map((pc) => (
+              <div
+                key={`${pc.entity_type}-${pc.entity_id}`}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  padding: '8px 12px',
+                  background: 'var(--bg-tertiary)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 13,
+                }}
+              >
+                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{pc.display_name}</span>
+                {pc.past_champion?.length > 0 && (
+                  <span style={{ color: 'var(--success)', fontSize: 12 }}>
+                    Champion: {pc.past_champion.join(', ')}
+                  </span>
+                )}
+                {pc.past_finalist?.length > 0 && (
+                  <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                    Finalist: {pc.past_finalist.join(', ')}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BracketView({ bracket, tournament, teams, participants, standby, onUpdateMatch, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, onSwapSlots, isPreview, canEdit }) {
   const isTeam = tournament?.format !== '1v1';
   const teamsToUse = (bracket?.teams && bracket.teams.length > 0) ? bracket.teams : (teams || []);
@@ -1428,6 +1536,7 @@ function App({ isCurrentPage = false }) {
   const [standby, setStandby] = useState([]);
   const [teams, setTeams] = useState([]);
   const [bracket, setBracket] = useState(null);
+  const [bracketSummary, setBracketSummary] = useState(null);
   const [previewBracket, setPreviewBracket] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -1494,11 +1603,12 @@ function App({ isCurrentPage = false }) {
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const [pRes, sRes, bRes, tRes] = await Promise.all([
+      const [pRes, sRes, bRes, tRes, sumRes] = await Promise.all([
         authFetch(`${API}/tournaments/${tournamentId}/participants`),
         authFetch(`${API}/tournaments/${tournamentId}/standby`),
         authFetch(`${API}/tournaments/${tournamentId}/bracket`),
         authFetch(`${API}/tournaments/${tournamentId}/teams`),
+        fetch(`${API}/tournaments/${tournamentId}/bracket/summary`),
       ]);
       const pData = await parseJson(pRes);
       const sData = await parseJson(sRes);
@@ -1514,6 +1624,16 @@ function App({ isCurrentPage = false }) {
       setStandby(Array.isArray(sData) ? sData : []);
       setTeams(Array.isArray(tData) ? tData : []);
       setBracket(bData);
+      let sumData = null;
+      if (sumRes.ok) {
+        try {
+          sumData = await parseJson(sumRes);
+          if (sumData?.error) sumData = null;
+        } catch {
+          sumData = null;
+        }
+      }
+      setBracketSummary(sumData);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2580,10 +2700,14 @@ function App({ isCurrentPage = false }) {
             const hasBracket = bracket && Object.keys(bracket.rounds || {}).length > 0;
             const hasPreview = previewBracket && Object.keys(previewBracket.rounds || {}).length > 0;
             if (isCurrentPage) {
+              const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
               return (
                 <div>
                   {hasBracket ? (
-                    <BracketView bracket={bracket} tournament={bracket.tournament} teams={teams} participants={participants} standby={standby} isPreview canEdit={false} />
+                    <>
+                      <BracketSummary summary={bracketSummary} bracket={bracket} isTeam={fmt !== '1v1'} compact />
+                      <BracketView bracket={bracket} tournament={bracket.tournament} teams={teams} participants={participants} standby={standby} isPreview canEdit={false} />
+                    </>
                   ) : hasPreview ? (
                     <BracketView bracket={previewBracket} tournament={previewBracket.tournament} teams={teams} participants={participants} standby={standby} isPreview canEdit={false} />
                   ) : (
@@ -2619,6 +2743,7 @@ function App({ isCurrentPage = false }) {
                 </div>
               ) : hasBracket ? (
                 <div>
+                  <BracketSummary summary={bracketSummary} bracket={bracket} isTeam={tournaments.find((t) => t.id === tournamentId)?.format !== '1v1'} compact={false} />
                   {canEdit && (
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
                       <button className="btn-danger" onClick={resetBracket} disabled={loading} title="Delete bracket and require regenerate">

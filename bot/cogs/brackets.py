@@ -777,6 +777,7 @@ async def update(
         )
         champ_matches = champ_result.scalars().all()
         max_round = None
+        total_match_count = None
         if bracket.bracket_type == "single_elim":
             max_r = await session.execute(
                 select(func.max(BracketMatch.round_num)).where(
@@ -785,7 +786,14 @@ async def update(
                 )
             )
             max_round = max_r.scalar() or 0
-        champion_declared = champion_match_has_winner(champ_matches, bracket.bracket_type, max_round)
+        elif bracket.bracket_type == "round_robin":
+            count_r = await session.execute(
+                select(func.count(BracketMatch.id)).where(BracketMatch.bracket_id == bracket.id)
+            )
+            total_match_count = count_r.scalar() or 0
+        champion_declared = champion_match_has_winner(
+            champ_matches, bracket.bracket_type, max_round, total_match_count
+        )
         if champion_declared:
             t.status = "completed"
         await session.commit()
