@@ -13,7 +13,7 @@ import config
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from bot.models import User
-from web.auth import require_moderator_user
+from web.auth import require_moderator_user, require_user, require_user_or_guild_tournament
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -265,8 +265,11 @@ class TeamsBulkUpdate(BaseModel):
 
 
 @router.get("/tournaments/{tournament_id}/participants")
-async def list_participants(tournament_id: int):
-    """List participants: manual entries first, then Discord signups (reaction or /tournament register). Includes all Discord users for team format so they appear in Players/Teams view."""
+async def list_participants(
+    tournament_id: int,
+    _auth: Optional[User] = Depends(require_user_or_guild_tournament),
+):
+    """List participants. Public for guild tournaments; requires auth for global."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
         if not t:
@@ -401,8 +404,11 @@ async def remove_registration(tournament_id: int, player_id: int, user: User = D
 
 
 @router.get("/tournaments/{tournament_id}/standby")
-async def list_standby(tournament_id: int):
-    """List standby/seat filler entries. Excludes those currently in a team to avoid duplicate listing."""
+async def list_standby(
+    tournament_id: int,
+    _auth: Optional[User] = Depends(require_user_or_guild_tournament),
+):
+    """List standby entries. Public for guild tournaments; requires auth for global."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
         if not t:
@@ -593,8 +599,11 @@ async def update_teams(tournament_id: int, body: TeamsBulkUpdate, user: User = D
 
 
 @router.get("/tournaments/{tournament_id}/teams")
-async def list_teams(tournament_id: int):
-    """List teams with their members (for team-format tournaments)."""
+async def list_teams(
+    tournament_id: int,
+    _auth: Optional[User] = Depends(require_user_or_guild_tournament),
+):
+    """List teams. Public for guild tournaments; requires auth for global."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
         if not t:
@@ -815,8 +824,8 @@ async def create_tournament(body: TournamentCreate):
 
 
 @router.get("/winners")
-async def list_winners():
-    """List all-time tournament champions (completed, closed, or archived tournaments with a bracket winner)."""
+async def list_winners(user: User = Depends(require_user)):
+    """List all-time tournament champions (global view; requires auth). Guild-scoped /api/s/{guild_id}/winners is public."""
     async with async_session_factory() as session:
         result = await session.execute(
             select(Tournament)
@@ -986,9 +995,8 @@ async def list_winners():
 
 
 @router.get("/tournaments/current")
-async def get_current_tournament(tournament_id: Optional[int] = None):
-    """Get open tournaments for /current page. Returns list of open/in_progress tournaments with default_id (latest).
-    Optional tournament_id returns that specific tournament if it's open."""
+async def get_current_tournament(tournament_id: Optional[int] = None, user: User = Depends(require_user)):
+    """Get open tournaments for /current page (global view; requires auth). Guild-scoped /api/s/{guild_id}/tournaments/current is public."""
     async with async_session_factory() as session:
         result = await session.execute(
             select(Tournament)
@@ -1018,8 +1026,8 @@ async def get_current_tournament(tournament_id: Optional[int] = None):
 
 
 @router.get("/tournaments")
-async def list_tournaments(include_archived: bool = False):
-    """List tournaments. By default excludes archived. Use ?include_archived=1 to include them."""
+async def list_tournaments(include_archived: bool = False, user: User = Depends(require_user)):
+    """List tournaments (global view; requires auth). Guild-scoped /api/s/{guild_id}/tournaments is public."""
     async with async_session_factory() as session:
         q = select(Tournament).order_by(Tournament.id.desc()).limit(50)
         if not include_archived:

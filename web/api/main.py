@@ -1,6 +1,7 @@
 """FastAPI bracket API - serves bracket data and built web UI."""
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,9 +15,11 @@ from sqlalchemy.orm import selectinload
 from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamManualMember, Tournament, TournamentManualEntry
 from bot.models.base import async_session_factory, init_db
 
+from bot.models import User
 from web.api.routes import router as api_router, _refresh_player_names_from_discord
 from web.api.utils import player_display_name
 from web.api.auth_routes import router as auth_router
+from web.auth import require_user_or_guild_tournament
 from web.api.settings_routes import router as settings_router
 from web.api.guild_scoped_routes import router as guild_scoped_router
 
@@ -72,8 +75,11 @@ api_app.include_router(guild_scoped_router, prefix="/s/{guild_id_or_slug}")
 
 # Explicit routes on api_app (paths relative to /api)
 @api_app.get("/tournaments/{tournament_id}/bracket")
-async def get_bracket(tournament_id: int):
-    """Get bracket data for a tournament."""
+async def get_bracket(
+    tournament_id: int,
+    _auth: Optional[User] = Depends(require_user_or_guild_tournament),
+):
+    """Get bracket data. Public for guild tournaments; requires auth for global."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
         if not t:
@@ -180,8 +186,11 @@ async def get_bracket(tournament_id: int):
 
 
 @api_app.get("/tournaments/{tournament_id}/bracket/summary")
-async def get_bracket_summary(tournament_id: int):
-    """Get compact summary: current round, win leader, participant credentials (champion/finalist in other tournaments)."""
+async def get_bracket_summary(
+    tournament_id: int,
+    _auth: Optional[User] = Depends(require_user_or_guild_tournament),
+):
+    """Get compact bracket summary. Public for guild tournaments; requires auth for global."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
         if not t:
@@ -503,8 +512,12 @@ async def _fetch_winners_with_ids(session: AsyncSession):
 
 
 @api_app.get("/tournaments/{tournament_id}/bracket/preview")
-async def get_bracket_preview(tournament_id: int, bracket_type: str = "single_elim"):
-    """Preview bracket structure before generating. Uses current participants/teams."""
+async def get_bracket_preview(
+    tournament_id: int,
+    bracket_type: str = "single_elim",
+    _auth: Optional[User] = Depends(require_user_or_guild_tournament),
+):
+    """Preview bracket structure. Public for guild tournaments; requires auth for global."""
     from bot.services.bracket_gen import preview_bracket_structure
 
     async with async_session_factory() as session:

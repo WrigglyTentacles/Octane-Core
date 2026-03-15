@@ -1,13 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from './AuthContext';
 import { useGuild } from './GuildContext';
 import { GuildSelector } from './GuildSelector';
 
 export default function WinnersPage() {
   const { guildId, apiBase } = useGuild();
+  const { user, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [winners, setWinners] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Global /winners requires auth; guild /s/:guildId/winners is public
+  useEffect(() => {
+    if (guildId) return;
+    if (!authLoading && !user) {
+      navigate('/login', { replace: true, state: { from: location } });
+    }
+  }, [guildId, authLoading, user, navigate, location]);
 
   useEffect(() => {
     (async () => {
@@ -24,6 +36,7 @@ export default function WinnersPage() {
   }, [apiBase]);
 
   if (loading) return <div style={{ padding: 32 }}>Loading...</div>;
+  if (!guildId && !authLoading && !user) return null; // Redirecting to login
 
   return (
     <div style={{ padding: 32, maxWidth: 720, margin: '0 auto' }}>

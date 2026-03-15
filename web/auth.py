@@ -13,7 +13,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import config
-from bot.models import GuildModerator, User
+from bot.models import GuildModerator, Tournament, User
 from bot.models.base import async_session_factory
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -185,6 +185,26 @@ async def require_user(
     user: Optional[User] = Depends(get_current_user),
 ) -> User:
     """Require authenticated user. Raises 401 if not logged in."""
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+async def require_user_or_guild_tournament(
+    tournament_id: int,
+    user: Optional[User] = Depends(get_current_user),
+) -> Optional[User]:
+    """Allow unauthenticated access for guild tournaments (guild_id != 0). Require auth for global (guild_id=0)."""
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+    if not t:
+        raise HTTPException(404, "Tournament not found")
+    if t.guild_id and t.guild_id != 0:
+        return user  # Guild tournament: public, user can be None
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

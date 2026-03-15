@@ -1889,12 +1889,13 @@ function App({ isCurrentPage = false }) {
     }).catch(() => {});
   }, [guildId, API]);
 
+  // Global /current and bracket views require auth; guild /s/:guildId/current is public
   useEffect(() => {
-    if (isCurrentPage) return; // Public page, no login required
+    if (isCurrentPage && guildId) return; // Guild current page: public
     if (!authLoading && !user) {
       navigate('/login', { replace: true, state: { from: location } });
     }
-  }, [authLoading, user, navigate, location, isCurrentPage]);
+  }, [authLoading, user, navigate, location, isCurrentPage, guildId]);
 
   // When switching guilds (global <-> server), clear stale tournament data so we don't show the previous view's players/bracket
   useEffect(() => {
@@ -2362,7 +2363,7 @@ function App({ isCurrentPage = false }) {
       const data = await parseJson(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to generate');
       await fetchData({ silent: true });
-      navigate('/bracket');
+      navigate(guildId ? `/s/${guildId}/bracket` : '/bracket');
     } catch (err) {
       setError(err.message);
     } finally {
