@@ -16,6 +16,7 @@ from web.auth import (
     get_current_user,
     get_user_by_username,
     hash_password,
+    promote_guild_moderator_if_needed,
     require_admin_user,
     require_user,
     verify_password,
@@ -79,6 +80,7 @@ async def login(body: LoginRequest):
 @router.get("/me", response_model=UserResponse)
 async def get_me(user: User = Depends(require_user)):
     """Get current authenticated user."""
+    user = await promote_guild_moderator_if_needed(user)
     return UserResponse(username=user.username, role=user.role)
 
 
@@ -87,12 +89,14 @@ async def get_me_optional(user: Optional[User] = Depends(get_current_user)):
     """Get current user if logged in, else null. For frontend auth check."""
     if not user:
         return None
+    user = await promote_guild_moderator_if_needed(user)
     return {"username": user.username, "role": user.role}
 
 
 @router.get("/my-guilds")
 async def get_my_guilds(user: User = Depends(require_user)):
     """List guilds the current user can moderate. Verifies with Discord and removes stale GuildModerator entries."""
+    user = await promote_guild_moderator_if_needed(user)
     headers = {"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"} if config.INTERNAL_API_SECRET else {}
 
     # Global admin/moderator: return all guilds the bot is in

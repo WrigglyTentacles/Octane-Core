@@ -74,7 +74,8 @@ async function parseJson(res) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`Server returned ${res.status}: ${text.slice(0, 100)}`);
+    const preview = text.trimStart().startsWith('<') ? 'HTML response' : text.slice(0, 80);
+    throw new Error(`Server returned ${res.status}: ${preview}`);
   }
 }
 
@@ -1732,7 +1733,8 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
 function App({ isCurrentPage = false }) {
   const { canEdit, authFetch, user, logout, isAdmin, loading: authLoading } = useAuth();
   const { guildId, apiBase } = useGuild();
-  const API = apiBase;
+  const API = apiBase; // Guild-scoped: list, current, winners, create
+  const API_GLOBAL = '/api'; // Global: tournament detail, bracket, settings (not under /api/s/:guild)
   const effectiveCanEdit = isCurrentPage ? false : canEdit;
   const location = useLocation();
   const navigate = useNavigate();
@@ -1825,11 +1827,11 @@ function App({ isCurrentPage = false }) {
     setError(null);
     try {
       const [pRes, sRes, bRes, tRes, sumRes] = await Promise.all([
-        authFetch(`${API}/tournaments/${tournamentId}/participants`),
-        authFetch(`${API}/tournaments/${tournamentId}/standby`),
-        authFetch(`${API}/tournaments/${tournamentId}/bracket`),
-        authFetch(`${API}/tournaments/${tournamentId}/teams`),
-        fetch(`${API}/tournaments/${tournamentId}/bracket/summary`),
+        authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/participants`),
+        authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/standby`),
+        authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket`),
+        authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/teams`),
+        fetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/summary`),
       ]);
       const pData = await parseJson(pRes);
       const sData = await parseJson(sRes);
@@ -1864,13 +1866,13 @@ function App({ isCurrentPage = false }) {
 
   useEffect(() => {
     if (!menuOpen) return;
-    fetch(`${API}/settings/discord`).then((r) => r.ok ? r.json() : {}).then((d) => {
+    fetch(`${API_GLOBAL}/settings/discord`).then((r) => r.ok ? r.json() : {}).then((d) => {
       setDiscordConfigReady(!!(d?.enabled && d?.discord_guild_id && d?.discord_signup_channel_id));
     }).catch(() => setDiscordConfigReady(false));
   }, [menuOpen]);
 
   useEffect(() => {
-    fetch(`${API}/settings`).then((r) => r.text()).then((text) => {
+    fetch(`${API_GLOBAL}/settings`).then((r) => r.text()).then((text) => {
       let s = {};
       try {
         s = text ? JSON.parse(text) : {};
@@ -1975,7 +1977,7 @@ function App({ isCurrentPage = false }) {
     const hasData = fmt === '1v1' ? participants.length >= 2 : teams.length >= 2;
     if (!hasData) return;
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/preview?bracket_type=${bracketType}`);
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/preview?bracket_type=${bracketType}`);
       const data = await parseJson(res);
       if (res.ok && !data.error) setPreviewBracket(data);
       else setPreviewBracket(null);
@@ -1995,7 +1997,7 @@ function App({ isCurrentPage = false }) {
 
   const addParticipant = async (displayName) => {
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/participants`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/participants`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: displayName }),
@@ -2012,9 +2014,9 @@ function App({ isCurrentPage = false }) {
     try {
       if (typeof id === 'string' && id.startsWith('discord:')) {
         const playerId = id.replace('discord:', '');
-        await authFetch(`${API}/tournaments/${tournamentId}/registrations/${playerId}`, { method: 'DELETE' });
+        await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/registrations/${playerId}`, { method: 'DELETE' });
       } else {
-        await authFetch(`${API}/tournaments/${tournamentId}/participants/${id}`, { method: 'DELETE' });
+        await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/participants/${id}`, { method: 'DELETE' });
       }
       await fetchData({ silent: true });
     } catch (err) {
@@ -2025,7 +2027,7 @@ function App({ isCurrentPage = false }) {
   const reorderParticipants = async (entryIds) => {
     try {
       const manualIds = entryIds.filter((id) => typeof id === 'number');
-      await authFetch(`${API}/tournaments/${tournamentId}/participants/reorder`, {
+      await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/participants/reorder`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entry_ids: manualIds }),
@@ -2038,7 +2040,7 @@ function App({ isCurrentPage = false }) {
 
   const renameParticipant = async (entryId, displayName) => {
     try {
-      await authFetch(`${API}/tournaments/${tournamentId}/participants/${entryId}`, {
+      await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/participants/${entryId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: displayName }),
@@ -2051,7 +2053,7 @@ function App({ isCurrentPage = false }) {
 
   const addStandby = async (displayName) => {
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/standby`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/standby`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: displayName }),
@@ -2066,7 +2068,7 @@ function App({ isCurrentPage = false }) {
 
   const removeStandby = async (id) => {
     try {
-      await authFetch(`${API}/tournaments/${tournamentId}/standby/${id}`, { method: 'DELETE' });
+      await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/standby/${id}`, { method: 'DELETE' });
       await fetchData({ silent: true });
     } catch (err) {
       setError(err.message);
@@ -2075,7 +2077,7 @@ function App({ isCurrentPage = false }) {
 
   const reorderStandby = async (entryIds) => {
     try {
-      await authFetch(`${API}/tournaments/${tournamentId}/standby/reorder`, {
+      await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/standby/reorder`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entry_ids: entryIds }),
@@ -2088,7 +2090,7 @@ function App({ isCurrentPage = false }) {
 
   const renameStandby = async (entryId, displayName) => {
     try {
-      await authFetch(`${API}/tournaments/${tournamentId}/standby/${entryId}`, {
+      await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/standby/${entryId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: displayName }),
@@ -2101,7 +2103,7 @@ function App({ isCurrentPage = false }) {
 
   const moveEntry = async (entryId, listType) => {
     try {
-      await authFetch(`${API}/tournaments/${tournamentId}/manual-entries/${entryId}/move`, {
+      await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/manual-entries/${entryId}/move`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ list_type: listType }),
@@ -2126,7 +2128,7 @@ function App({ isCurrentPage = false }) {
       body = slot === 1 ? { manual_entry1_id: entity.id } : { manual_entry2_id: entity.id };
     } else return;
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/${matchId}`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/matches/${matchId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -2140,7 +2142,7 @@ function App({ isCurrentPage = false }) {
 
   const clearWinner = async (matchId) => {
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/${matchId}/clear-winner`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/matches/${matchId}/clear-winner`, {
         method: 'POST',
       });
       if (!res.ok) {
@@ -2156,7 +2158,7 @@ function App({ isCurrentPage = false }) {
   const swapSlots = async (fromMatchId, fromSlot, toMatchId, toSlot) => {
     if (fromMatchId === toMatchId && fromSlot === toSlot) return;
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/swap-slots`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/matches/swap-slots`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from_match_id: fromMatchId, from_slot: fromSlot, to_match_id: toMatchId, to_slot: toSlot }),
@@ -2173,7 +2175,7 @@ function App({ isCurrentPage = false }) {
 
   const swapWinner = async (matchId) => {
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/${matchId}/swap-winner`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/matches/${matchId}/swap-winner`, {
         method: 'POST',
       });
       if (!res.ok) {
@@ -2201,7 +2203,7 @@ function App({ isCurrentPage = false }) {
       : (slot === 1 ? (m.manual_entry1_id != null ? { winner_manual_entry_id: winnerId } : { winner_player_id: idForPayload(winnerId) })
         : (m.manual_entry2_id != null ? { winner_manual_entry_id: winnerId } : { winner_player_id: idForPayload(winnerId) }));
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/${matchId}`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/matches/${matchId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -2242,7 +2244,7 @@ function App({ isCurrentPage = false }) {
       if (isTeam) body.team2_id = null; else body[m.manual_entry2_id != null ? 'manual_entry2_id' : 'player2_id'] = null;
     }
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/matches/${matchId}`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/matches/${matchId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -2266,7 +2268,7 @@ function App({ isCurrentPage = false }) {
   const renameTournament = async () => {
     if (!renameValue.trim()) return;
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: renameValue.trim() }),
@@ -2282,7 +2284,7 @@ function App({ isCurrentPage = false }) {
 
   const cloneTournament = async () => {
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/clone`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/clone`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
@@ -2298,7 +2300,7 @@ function App({ isCurrentPage = false }) {
 
   const updateTournamentFormat = async (newFormat) => {
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ format: newFormat }),
@@ -2315,7 +2317,7 @@ function App({ isCurrentPage = false }) {
     if (!window.confirm('Delete this tournament and all its participants, standby, and bracket data? This cannot be undone.')) return;
     const idToDelete = tournamentId;
     try {
-      const res = await authFetch(`${API}/tournaments/${idToDelete}`, { method: 'DELETE' });
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${idToDelete}`, { method: 'DELETE' });
       const data = await parseJson(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to delete');
       setTournamentId(null);
@@ -2332,7 +2334,7 @@ function App({ isCurrentPage = false }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket/generate`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ use_manual_order: true, bracket_type: bracketType }),
@@ -2353,7 +2355,7 @@ function App({ isCurrentPage = false }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/bracket`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket`, {
         method: 'DELETE',
       });
       const data = await parseJson(res);
@@ -2371,8 +2373,8 @@ function App({ isCurrentPage = false }) {
     setError(null);
     try {
       const url = type === 'signup'
-        ? `${API}/tournaments/${tournamentId}/post-signup`
-        : `${API}/tournaments/${tournamentId}/bracket/post-${type}`;
+        ? `${API_GLOBAL}/tournaments/${tournamentId}/post-signup`
+        : `${API_GLOBAL}/tournaments/${tournamentId}/bracket/post-${type}`;
       const res = await authFetch(url, {
         method: 'POST',
         headers: type === 'signup' ? { 'Content-Type': 'application/json' } : undefined,
@@ -2398,7 +2400,7 @@ function App({ isCurrentPage = false }) {
           member_ids: t.members.map((m) => m.id).filter((id) => id != null && id !== ''),
         })),
       };
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/teams`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/teams`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -2413,7 +2415,7 @@ function App({ isCurrentPage = false }) {
 
   const substituteStandby = async (teamId, memberEntryId, standbyEntryId) => {
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/teams/substitute`, {
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/teams/substitute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ team_id: teamId, member_entry_id: memberEntryId, standby_entry_id: standbyEntryId }),
@@ -2431,7 +2433,7 @@ function App({ isCurrentPage = false }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await authFetch(`${API}/tournaments/${tournamentId}/teams/regenerate`, { method: 'POST' });
+      const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/teams/regenerate`, { method: 'POST' });
       const data = await parseJson(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to regenerate');
       await fetchData({ silent: true });
@@ -2588,7 +2590,7 @@ function App({ isCurrentPage = false }) {
                             <button
                               onClick={async () => {
                                 try {
-                                  const res = await authFetch(`${API}/tournaments/${tournamentId}/post-signup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+                                  const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/post-signup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
                                   const data = await res.json();
                                   if (!res.ok) throw new Error(data?.detail || 'Failed to post');
                                   setError('');
@@ -2610,7 +2612,7 @@ function App({ isCurrentPage = false }) {
                             <button
                               onClick={async () => {
                                 try {
-                                  await authFetch(`${API}/tournaments/${tournamentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'open' }) });
+                                  await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'open' }) });
                                   await fetchTournaments(showArchived);
                                   setMenuOpen(false);
                                 } catch (err) {
@@ -2623,7 +2625,7 @@ function App({ isCurrentPage = false }) {
                               Re-open tournament
                             </button>
                           )}
-                          <button onClick={async () => { try { await authFetch(`${API}/tournaments/${tournamentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: !tournaments.find((t) => t.id === tournamentId)?.archived }) }); await fetchTournaments(showArchived); setMenuOpen(false); } catch (err) { setError(err.message); } }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Archive to hide from default list">
+                          <button onClick={async () => { try { await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: !tournaments.find((t) => t.id === tournamentId)?.archived }) }); await fetchTournaments(showArchived); setMenuOpen(false); } catch (err) { setError(err.message); } }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Archive to hide from default list">
                             {tournaments.find((t) => t.id === tournamentId)?.archived ? 'Unarchive' : 'Archive'}
                           </button>
                           <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0' }} />
@@ -2704,7 +2706,7 @@ function App({ isCurrentPage = false }) {
                         <button className="primary" onClick={async () => {
                           try {
                             const body = { registration_deadline: deadlineValue ? new Date(deadlineValue).toISOString() : '' };
-                            const res = await authFetch(`${API}/tournaments/${tournamentId}`, {
+                            const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}`, {
                               method: 'PATCH',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify(body),
@@ -2717,7 +2719,7 @@ function App({ isCurrentPage = false }) {
                         }}>Save</button>
                         <button onClick={async () => {
                           try {
-                            const res = await authFetch(`${API}/tournaments/${tournamentId}`, {
+                            const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}`, {
                               method: 'PATCH',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ registration_deadline: '' }),

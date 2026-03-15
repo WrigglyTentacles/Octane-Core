@@ -9,7 +9,7 @@ import jwt
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import config
@@ -114,6 +114,9 @@ async def claim_guild_moderator_with_credentials(
                 raise ValueError("Username already taken")
             user.username = username
             user.password_hash = hash_password(password)
+            # Ensure they have moderator role (they proved mod status via /webregister)
+            if user.role == "user":
+                user.role = "moderator"
         else:
             # New user - username must be unique
             if other_user:
@@ -121,7 +124,7 @@ async def claim_guild_moderator_with_credentials(
             user = User(
                 username=username,
                 password_hash=hash_password(password),
-                role="user",
+                role="moderator",  # Proven mod via /webregister; GuildModerator limits which guilds they see
                 discord_id=discord_id,
             )
             session.add(user)
@@ -160,6 +163,21 @@ async def get_current_user(
     user = await get_user_by_username(username)
     if not user:
         return None
+    return user
+
+
+async def promote_guild_moderator_if_needed(user: User) -> User:
+    """If user has role=user but GuildModerator exists, upgrade to moderator (for existing registrations)."""
+    if user.role != "user":
+        return user
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(GuildModerator).where(GuildModerator.user_id == user.id).limit(1)
+        )
+        if result.scalar_one_or_none():
+            await session.execute(update(User).where(User.id == user.id).values(role="moderator"))
+            await session.commit()
+            user.role = "moderator"
     return user
 
 
