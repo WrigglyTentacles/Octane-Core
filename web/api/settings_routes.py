@@ -13,7 +13,7 @@ from bot.models import SiteSettings
 from bot.models.base import async_session_factory
 from web.auth import require_global_admin_user, require_moderator_user
 
-router = APIRouter(prefix="/api/settings", tags=["settings"])
+router = APIRouter(prefix="/settings", tags=["settings"])  # Mounted at /api in main
 
 DEFAULTS = {
     "site_title": "Octane Bracket Manager",

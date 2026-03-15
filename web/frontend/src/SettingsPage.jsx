@@ -47,6 +47,7 @@ export default function SettingsPage() {
   const [bracketChannelId, setBracketChannelId] = useState('');
   const [bracketSaving, setBracketSaving] = useState(false);
   const [bracketChannelsLoading, setBracketChannelsLoading] = useState(false);
+  const [channelsError, setChannelsError] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -118,14 +119,27 @@ export default function SettingsPage() {
   const fetchChannels = useCallback(async (gid) => {
     if (!gid) {
       setChannels([]);
+      setChannelsError('');
       return;
     }
     setBracketChannelsLoading(true);
+    setChannelsError('');
     try {
-      const res = await authFetch(`${API}/settings/discord/guilds/${gid}/channels`);
+      // Try /api/discord/guilds/... first; fallback to /api/settings/discord/guilds/... (both exist)
+      let res = await authFetch(`${API}/discord/guilds/${gid}/channels`);
+      if (res.status === 404) {
+        res = await authFetch(`${API}/settings/discord/guilds/${gid}/channels`);
+      }
       const data = await res.json();
-      setChannels(data.channels || []);
-    } catch {
+      if (!res.ok) {
+        setChannelsError(data?.detail || data?.error || 'Failed to load channels');
+        setChannels([]);
+      } else {
+        setChannels(data.channels || []);
+        if (!(data.channels || []).length) setChannelsError('No channels found. Add the bot to this server first, or the bot may not have access to any channels.');
+      }
+    } catch (err) {
+      setChannelsError(err.message || 'Failed to load channels');
       setChannels([]);
     } finally {
       setBracketChannelsLoading(false);
@@ -141,21 +155,42 @@ export default function SettingsPage() {
     else setChannels([]);
   }, [bracketGuildId, fetchChannels]);
 
+  // When at global settings and user selects a server, load that guild's Discord config
+  useEffect(() => {
+    if (effectiveGuildId || !bracketGuildId) return;
+    fetch(`/api/s/${bracketGuildId}/settings/discord`)
+      .then((r) => r.ok ? r.json() : {})
+      .then((d) => {
+        setBracketChannelId(d.discord_bracket_channel_id || '');
+        setDiscordSettings((s) => ({
+          ...s,
+          discord_bracket_channel_id: d.discord_bracket_channel_id || '',
+          discord_bracket_channel_name: d.discord_bracket_channel_name || '',
+        }));
+      })
+      .catch(() => {});
+  }, [bracketGuildId, effectiveGuildId]);
+
   const handleSaveBracketChannel = async (e) => {
     e.preventDefault();
+    const targetGuildId = effectiveGuildId || bracketGuildId;
+    if (!targetGuildId) {
+      setError('Select a server first');
+      return;
+    }
     setBracketSaving(true);
     setError('');
     try {
       const selectedChannel = channels.find((c) => c.id === bracketChannelId);
-      const discordUrl = effectiveGuildId ? `${settingsApi}/settings/discord` : `${API}/settings/discord`;
+      // Always save to per-guild config so each Discord server has its own channel
+      const discordUrl = `/api/s/${targetGuildId}/settings/discord`;
       const res = await authFetch(discordUrl, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          effectiveGuildId
-            ? { discord_bracket_channel_id: bracketChannelId || '', discord_bracket_channel_name: selectedChannel?.name || '' }
-            : { discord_bracket_guild_id: bracketGuildId || '', discord_bracket_channel_id: bracketChannelId || '', discord_bracket_channel_name: selectedChannel?.name || '' }
-        ),
+        body: JSON.stringify({
+          discord_bracket_channel_id: bracketChannelId || '',
+          discord_bracket_channel_name: selectedChannel?.name || '',
+        }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -455,7 +490,7 @@ export default function SettingsPage() {
 
           <h2 style={{ margin: '24px 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Bracket post channel</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: 16, fontSize: 14 }}>
-            Round lineup and tournament results will be posted here when you advance rounds via the web UI. If not set, falls back to the signup channel.
+            Each Discord server has its own bracket channel. Round lineup and tournament results post to the channel configured for that server. Select a server, then choose the channel. If not set, falls back to the signup channel.
           </p>
           <form onSubmit={handleSaveBracketChannel} style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end', marginBottom: 12 }}>
@@ -494,14 +529,22 @@ export default function SettingsPage() {
                 {bracketSaving ? 'Saving...' : 'Save'}
               </button>
             </div>
+            {channelsError && (
+              <p style={{ color: 'var(--error)', fontSize: 13, marginTop: 8 }}>{channelsError}</p>
+            )}
           </form>
           {discordSettings.discord_bracket_channel_id ? (
             <p style={{ color: 'var(--success)', fontSize: 14 }}>
               ✓ Bracket posts: #{discordSettings.discord_bracket_channel_name || 'channel'}
+              {!effectiveGuildId && bracketGuildId && guilds.find((g) => g.id === bracketGuildId) && (
+                <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>
+                  for {guilds.find((g) => g.id === bracketGuildId).name}
+                </span>
+              )}
             </p>
           ) : (
             <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>
-              Not configured. Select a server and channel above.
+              {effectiveGuildId ? 'Not configured. Select a channel above.' : 'Not configured. Select a server and channel above.'}
             </p>
           )}
         </div>

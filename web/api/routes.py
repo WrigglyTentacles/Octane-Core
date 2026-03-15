@@ -35,7 +35,37 @@ from bot.models.base import async_session_factory
 from web.api.utils import player_display_name
 from bot.models.tournament import parse_format_players
 
-router = APIRouter(prefix="/api", tags=["tournaments"])
+router = APIRouter(prefix="", tags=["tournaments"])  # Mounted at /api in main
+
+
+@router.get("/discord/guilds/{guild_id}/channels")
+async def get_discord_channels(guild_id: str, user: User = Depends(require_moderator_user)):
+    """List text channels in a guild (for channel picker). Proxies to bot."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        raise HTTPException(503, "Discord integration not configured")
+    url = f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/discord/guilds/{guild_id}/channels"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+            )
+    except httpx.ConnectError as e:
+        raise HTTPException(
+            503, "Could not reach the Discord bot. Ensure it is running."
+        ) from e
+    if r.status_code == 200:
+        return r.json()
+    # Bot returns 404 when guild not found (bot not in that server) - return empty channels
+    # so the UI can show a helpful message instead of a generic error
+    if r.status_code == 404:
+        try:
+            err = r.json()
+            if err.get("error") == "Guild not found":
+                return {"channels": []}
+        except Exception:
+            pass
+    raise HTTPException(r.status_code, r.text)
 
 
 async def _refresh_player_names_from_discord(player_ids: list[int]) -> None:

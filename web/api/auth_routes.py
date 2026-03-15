@@ -23,7 +23,7 @@ from web.auth import (
     verify_password,
 )
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"])  # Mounted at /api in main
 
 
 class LoginRequest(BaseModel):
@@ -114,7 +114,8 @@ async def get_my_guilds(user: User = Depends(require_user)):
             if r.status_code != 200:
                 return {"guilds": []}
             data = r.json()
-            return {"guilds": [{"guild_id": int(g["id"]), "name": g["name"], "slug": None} for g in data.get("guilds", [])]}
+            # Return guild_id as string to avoid JS number precision loss (snowflakes > Number.MAX_SAFE_INTEGER)
+            return {"guilds": [{"guild_id": g["id"], "name": g["name"], "slug": None} for g in data.get("guilds", [])]}
         except Exception:
             return {"guilds": []}
 
@@ -130,7 +131,7 @@ async def get_my_guilds(user: User = Depends(require_user)):
                 .where(GuildModerator.user_id == user.id)
             )
             rows = result.all()
-            return {"guilds": [{"guild_id": gm.guild_id, "name": gc.name if gc else str(gm.guild_id), "slug": gc.slug if gc else None} for gm, gc in rows]}
+            return {"guilds": [{"guild_id": str(gm.guild_id), "name": gc.name if gc else str(gm.guild_id), "slug": gc.slug if gc else None} for gm, gc in rows]}
 
     guilds = []
     async with async_session_factory() as session:
@@ -156,7 +157,7 @@ async def get_my_guilds(user: User = Depends(require_user)):
                 continue
             gc_result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == gm.guild_id))
             gc = gc_result.scalar_one_or_none()
-            guilds.append({"guild_id": gm.guild_id, "name": gc.name if gc else str(gm.guild_id), "slug": gc.slug if gc else None})
+            guilds.append({"guild_id": str(gm.guild_id), "name": gc.name if gc else str(gm.guild_id), "slug": gc.slug if gc else None})
         await session.commit()
     return {"guilds": guilds}
 

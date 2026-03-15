@@ -2,7 +2,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -55,13 +55,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(api_router)
-app.include_router(auth_router)
-app.include_router(settings_router)
-app.include_router(guild_scoped_router, prefix="/api/s/{guild_id_or_slug}")
+# API sub-app: mount at /api BEFORE static so /api/* requests reach the API
+# (StaticFiles at / would otherwise catch all requests and return 404)
+api_app = FastAPI(title="Octane API", lifespan=lifespan)
+api_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+api_app.include_router(api_router)
+api_app.include_router(auth_router)
+api_app.include_router(settings_router)
+api_app.include_router(guild_scoped_router, prefix="/s/{guild_id_or_slug}")
 
-
-@app.get("/api/tournaments/{tournament_id}/bracket")
+# Explicit routes on api_app (paths relative to /api)
+@api_app.get("/tournaments/{tournament_id}/bracket")
 async def get_bracket(tournament_id: int):
     """Get bracket data for a tournament."""
     async with async_session_factory() as session:
@@ -169,7 +179,7 @@ async def get_bracket(tournament_id: int):
         }
 
 
-@app.get("/api/tournaments/{tournament_id}/bracket/summary")
+@api_app.get("/tournaments/{tournament_id}/bracket/summary")
 async def get_bracket_summary(tournament_id: int):
     """Get compact summary: current round, win leader, participant credentials (champion/finalist in other tournaments)."""
     async with async_session_factory() as session:
@@ -492,7 +502,7 @@ async def _fetch_winners_with_ids(session: AsyncSession):
     return winners
 
 
-@app.get("/api/tournaments/{tournament_id}/bracket/preview")
+@api_app.get("/tournaments/{tournament_id}/bracket/preview")
 async def get_bracket_preview(tournament_id: int, bracket_type: str = "single_elim"):
     """Preview bracket structure before generating. Uses current participants/teams."""
     from bot.services.bracket_gen import preview_bracket_structure
@@ -552,10 +562,13 @@ async def get_bracket_preview(tournament_id: int, bracket_type: str = "single_el
         }
 
 
-@app.get("/api/health")
+@api_app.get("/health")
 async def health():
     return {"status": "ok"}
 
+
+# Mount API at /api first so /api/* is handled before static
+app.mount("/api", api_app)
 
 # Serve built frontend (SPA fallback handled by SPAFallbackMiddleware above)
 if _frontend_dist.exists():
