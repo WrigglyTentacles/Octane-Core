@@ -1896,6 +1896,18 @@ function App({ isCurrentPage = false }) {
     }
   }, [authLoading, user, navigate, location, isCurrentPage]);
 
+  // When switching guilds (global <-> server), clear stale tournament data so we don't show the previous view's players/bracket
+  useEffect(() => {
+    setTournamentId(null);
+    setTournaments([]);
+    setParticipants([]);
+    setStandby([]);
+    setTeams([]);
+    setBracket(null);
+    setBracketSummary(null);
+    setPreviewBracket(null);
+  }, [guildId]);
+
   useEffect(() => {
     fetchTournaments();
   }, [apiBase]);
@@ -2827,7 +2839,8 @@ function App({ isCurrentPage = false }) {
                               if (newTournamentDeadline) {
                                 body.registration_deadline = new Date(newTournamentDeadline).toISOString();
                               }
-                              if (guildId) body.guild_id = parseInt(guildId, 10);
+                              // Pass guild_id as string to avoid JS number precision loss (snowflakes > Number.MAX_SAFE_INTEGER)
+                              if (guildId) body.guild_id = guildId;
                               const res = await authFetch(`${API_GLOBAL}/tournaments`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },

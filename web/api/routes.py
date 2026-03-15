@@ -762,8 +762,15 @@ async def regenerate_teams(tournament_id: int, user: User = Depends(require_mode
 class TournamentCreate(BaseModel):
     name: str
     format: str = "1v1"  # 1v1, 2v2, 3v3, 4v4, custom
-    guild_id: Optional[int] = None  # Optional; 0 for web-only
+    guild_id: Optional[int] = None  # Optional; 0 for web-only. Accept str from frontend (avoids JS number precision loss).
     registration_deadline: Optional[str] = None  # ISO datetime, e.g. 2026-02-24T18:00:00
+
+    @field_validator("guild_id", mode="before")
+    @classmethod
+    def coerce_guild_id(cls, v):
+        if v is None:
+            return None
+        return int(v)  # Accept str from frontend (snowflakes > Number.MAX_SAFE_INTEGER)
 
 
 def _mmr_for_format(fmt: str) -> str:
