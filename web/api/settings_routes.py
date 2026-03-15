@@ -104,8 +104,21 @@ class SettingsImport(BaseModel):
 async def get_discord_settings():
     """Get Discord config for web-triggered signup and bracket posts. Only enabled when INTERNAL_API_SECRET is set."""
     enabled = bool(config.INTERNAL_API_SECRET)
+    invite_url = ""
+    if enabled and config.BOT_INTERNAL_URL:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(
+                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/discord/invite-url",
+                    headers=_bot_request_headers(),
+                )
+            if r.status_code == 200:
+                invite_url = r.json().get("url", "")
+        except Exception:
+            pass
     return {
         "enabled": enabled,
+        "invite_url": invite_url,
         "discord_guild_id": await _get_setting("discord_guild_id") or "",
         "discord_signup_channel_id": await _get_setting("discord_signup_channel_id") or "",
         "discord_signup_channel_name": await _get_setting("discord_signup_channel_name") or "",

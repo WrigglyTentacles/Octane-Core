@@ -1,11 +1,14 @@
 import React, { createContext, useContext } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 
 const GuildContext = createContext(null);
 
 export function GuildProvider({ children }) {
   const params = useParams();
-  const guildId = params.guildId || null;
+  const location = useLocation();
+  // useParams may be empty when GuildProvider wraps Routes; fallback to parsing pathname
+  const m = location.pathname.match(/^\/s\/(\d+)/);
+  const guildId = params.guildId || (m ? m[1] : null);
   const apiBase = guildId ? `/api/s/${guildId}` : '/api';
 
   return (

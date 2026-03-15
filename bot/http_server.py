@@ -410,6 +410,39 @@ async def _handle_get_guilds(request: aiohttp.web.Request) -> aiohttp.web.Respon
     return aiohttp.web.json_response({"guilds": guilds})
 
 
+async def _handle_invite_url(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """GET /internal/discord/invite-url - Bot invite URL with correct bot scope."""
+    err = _check_internal_auth(request)
+    if err:
+        return err
+    bot = request.app["bot"]
+    app_id = getattr(bot, "application_id", None)
+    if not app_id:
+        return aiohttp.web.json_response({"error": "Bot not ready"}, status=503)
+    permissions = "277025508360"
+    url = f"https://discord.com/api/oauth2/authorize?client_id={app_id}&permissions={permissions}&scope=bot%20applications.commands"
+    return aiohttp.web.json_response({"url": url})
+
+
+async def _handle_has_mod(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """GET /internal/discord/guilds/{guild_id}/members/{user_id}/has-mod - Check if user has mod role."""
+    err = _check_internal_auth(request)
+    if err:
+        return err
+    try:
+        guild_id = int(request.match_info["guild_id"])
+        user_id = int(request.match_info["user_id"])
+    except (ValueError, KeyError):
+        return aiohttp.web.json_response({"error": "Invalid guild_id or user_id"}, status=400)
+    bot = request.app["bot"]
+    guild = bot.get_guild(guild_id)
+    if not guild:
+        return aiohttp.web.json_response({"error": "Guild not found"}, status=404)
+    from bot.checks import user_has_mod_in_guild
+    has_mod = await user_has_mod_in_guild(guild, user_id, client=bot)
+    return aiohttp.web.json_response({"has_mod": has_mod})
+
+
 async def _handle_get_channels(request: aiohttp.web.Request) -> aiohttp.web.Response:
     """GET /internal/discord/guilds/{guild_id}/channels - List text channels."""
     err = _check_internal_auth(request)
@@ -447,8 +480,12 @@ def create_app(bot) -> aiohttp.web.Application:
     app.router.add_post("/internal/post-teams", _handle_post_teams)
     app.router.add_post("/internal/refresh-players", _handle_refresh_players)
     app.router.add_get("/internal/discord/guilds", _handle_get_guilds)
+    app.router.add_get("/internal/discord/invite-url", _handle_invite_url)
     app.router.add_get(
         "/internal/discord/guilds/{guild_id}/channels", _handle_get_channels
+    )
+    app.router.add_get(
+        "/internal/discord/guilds/{guild_id}/members/{user_id}/has-mod", _handle_has_mod
     )
     return app
 

@@ -13,7 +13,14 @@ Discord bot and web app for Rocket League tournaments. Create tournaments, manag
 
 ## Setup
 
-1. **Discord** — Create an application at [Discord Developer Portal](https://discord.com/developers/applications), add a bot, and copy the token.
+1. **Discord** — Create an application at [Discord Developer Portal](https://discord.com/developers/applications):
+   - **General Information** → copy your **Application ID**
+   - **Bot** → click **Add Bot** (if not already added), copy the token, enable **Server Members Intent**
+   - **Invite the bot** — use this URL (replace `YOUR_APPLICATION_ID` with your Application ID):
+     ```
+     https://discord.com/api/oauth2/authorize?client_id=YOUR_APPLICATION_ID&permissions=277025508360&scope=bot%20applications.commands
+     ```
+     The **`bot`** scope is required for the bot to join the server. Without it, the app installs but no bot user appears. Use **OAuth2 → URL Generator** in the Developer Portal and select scopes `bot` and `applications.commands` as an alternative.
 
 2. **Environment** — Copy `.env.example` to `.env` and configure:
    - `DISCORD_TOKEN` (required)

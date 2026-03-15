@@ -27,6 +27,7 @@ export default function SettingsPage() {
   });
   const [discordSettings, setDiscordSettings] = useState({
     enabled: false,
+    invite_url: '',
     discord_guild_id: '',
     discord_signup_channel_id: '',
     discord_signup_channel_name: '',
@@ -58,6 +59,7 @@ export default function SettingsPage() {
         const dData = await dRes.json();
         setDiscordSettings({
           enabled: !!dData.enabled,
+          invite_url: dData.invite_url || '',
           discord_guild_id: dData.discord_guild_id || '',
           discord_signup_channel_id: dData.discord_signup_channel_id || '',
           discord_signup_channel_name: dData.discord_signup_channel_name || '',
@@ -393,7 +395,34 @@ export default function SettingsPage() {
 
       {discordSettings.enabled && (
         <div style={{ borderTop: '1px solid var(--border)', marginTop: 40, paddingTop: 32 }}>
-          <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Discord signup</h2>
+          <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Add bot to another server</h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: 12, fontSize: 14 }}>
+            Use this link to add the bot to a new server. The <strong>bot</strong> scope is required — other links may install the app without adding the bot.
+          </p>
+          {discordSettings.invite_url ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+              <a
+                href={discordSettings.invite_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="primary"
+                style={{ padding: '10px 20px', textDecoration: 'none', display: 'inline-block' }}
+              >
+                Add to server
+              </a>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(discordSettings.invite_url).then(() => alert('Copied!'))}
+                style={{ padding: '10px 16px' }}
+              >
+                Copy link
+              </button>
+            </div>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>Invite URL not available. Ensure the bot is running.</p>
+          )}
+
+          <h2 style={{ margin: '24px 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Discord signup</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: 16, fontSize: 14 }}>
             Post signup messages to Discord from the web UI. Run <code style={{ background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>/tournament set-signup-channel</code> in your Discord server (in the channel where you want signups posted) to configure.
           </p>

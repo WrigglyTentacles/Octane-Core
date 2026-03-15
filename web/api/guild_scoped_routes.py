@@ -1,10 +1,25 @@
 """Guild-scoped API routes: /api/s/{guild_id_or_slug}/..."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+
+def _utc_now():
+    """Current UTC time for comparison with DB datetimes (may be naive)."""
+    return datetime.now(timezone.utc)
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Ensure datetime is timezone-aware UTC for comparison."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+logger = logging.getLogger("octane.api")
 from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +32,7 @@ from bot.models import (
 )
 from bot.models.base import async_session_factory
 from web.auth import (
-    claim_guild_moderator,
+    claim_guild_moderator_with_credentials,
     create_access_token,
     require_moderator_for_guild,
     require_user,
@@ -141,39 +156,40 @@ async def list_winners(guild_id: int = Depends(resolve_guild)):
         return winners
 
 
-# --- Registration (magic link) ---
+# --- Registration (magic link + username/password) ---
 
 
 class RegisterRequest(BaseModel):
     token: str
+    username: str
+    password: str
 
 
 @router.post("/register")
-async def register_with_token(
+async def register_with_credentials(
     guild_id: int = Depends(resolve_guild),
-    body: Optional[RegisterRequest] = None,
-    token_query: Optional[str] = None,
+    body: RegisterRequest = ...,
 ):
-    """Exchange magic link token for JWT. Token from body or query param."""
-    token = None
-    if body and body.token:
-        token = body.token
-    elif token_query:
-        token = token_query
-    if not token:
-        raise HTTPException(400, "token required (body or query)")
+    """Complete registration: validate magic link token, create/update user with username/password, add guild moderator."""
+    if not body.token or not body.token.strip():
+        raise HTTPException(400, "token required")
+    if not body.username or len(body.username.strip()) < 2:
+        raise HTTPException(400, "Username must be at least 2 characters")
+    if not body.password or len(body.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
 
     async with async_session_factory() as session:
         result = await session.execute(
             select(RegistrationToken).where(
-                RegistrationToken.token == token,
+                RegistrationToken.token == body.token.strip(),
                 RegistrationToken.guild_id == guild_id,
             )
         )
         rt = result.scalar_one_or_none()
         if not rt:
+            logger.warning("Register: invalid or expired token for guild %s", guild_id)
             raise HTTPException(400, "Invalid or expired token")
-        if rt.expires_at < datetime.now(timezone.utc):
+        if _ensure_utc(rt.expires_at) < _utc_now():
             await session.delete(rt)
             await session.commit()
             raise HTTPException(400, "Token expired")
@@ -181,44 +197,16 @@ async def register_with_token(
         await session.delete(rt)
         await session.commit()
 
-    user = await claim_guild_moderator(discord_user_id, guild_id)
-    jwt_token = create_access_token(user.username, user.role)
-    return {
-        "access_token": jwt_token,
-        "token_type": "bearer",
-        "username": user.username,
-        "role": user.role,
-    }
-
-
-@router.get("/register")
-async def register_with_token_get(
-    guild_id: int = Depends(resolve_guild),
-    token: Optional[str] = None,
-):
-    """Exchange magic link token for JWT (GET for redirect from magic link)."""
-    if not token:
-        raise HTTPException(400, "token required (query param)")
-    # Reuse POST logic
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(RegistrationToken).where(
-                RegistrationToken.token == token,
-                RegistrationToken.guild_id == guild_id,
-            )
+    try:
+        user = await claim_guild_moderator_with_credentials(
+            discord_user_id, guild_id, body.username.strip(), body.password
         )
-        rt = result.scalar_one_or_none()
-        if not rt:
-            raise HTTPException(400, "Invalid or expired token")
-        if rt.expires_at < datetime.now(timezone.utc):
-            await session.delete(rt)
-            await session.commit()
-            raise HTTPException(400, "Token expired")
-        discord_user_id = rt.discord_user_id
-        await session.delete(rt)
-        await session.commit()
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:
+        logger.exception("Register: claim_guild_moderator_with_credentials failed: %s", e)
+        raise HTTPException(500, "Registration failed") from e
 
-    user = await claim_guild_moderator(discord_user_id, guild_id)
     jwt_token = create_access_token(user.username, user.role)
     return {
         "access_token": jwt_token,

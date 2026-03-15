@@ -92,6 +92,53 @@ async def claim_guild_moderator(
         return user
 
 
+async def claim_guild_moderator_with_credentials(
+    discord_id: int, guild_id: int, username: str, password: str, role: str = "moderator"
+) -> User:
+    """Create or update User with username/password linked to discord_id, add GuildModerator."""
+    username = username.strip()
+    if not username or len(username) < 2:
+        raise ValueError("Username must be at least 2 characters")
+    if not password or len(password) < 6:
+        raise ValueError("Password must be at least 6 characters")
+
+    async with async_session_factory() as session:
+        existing_by_discord = await session.execute(select(User).where(User.discord_id == discord_id))
+        user = existing_by_discord.scalar_one_or_none()
+        existing_by_username = await session.execute(select(User).where(User.username == username))
+        other_user = existing_by_username.scalar_one_or_none()
+
+        if user:
+            # Update existing user - username must not be taken by someone else
+            if other_user and other_user.id != user.id:
+                raise ValueError("Username already taken")
+            user.username = username
+            user.password_hash = hash_password(password)
+        else:
+            # New user - username must be unique
+            if other_user:
+                raise ValueError("Username already taken")
+            user = User(
+                username=username,
+                password_hash=hash_password(password),
+                role="user",
+                discord_id=discord_id,
+            )
+            session.add(user)
+            await session.flush()
+
+        gm = await session.execute(
+            select(GuildModerator).where(
+                GuildModerator.user_id == user.id, GuildModerator.guild_id == guild_id
+            )
+        )
+        if not gm.scalar_one_or_none():
+            session.add(GuildModerator(user_id=user.id, guild_id=guild_id, role=role))
+        await session.commit()
+        await session.refresh(user)
+        return user
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(http_bearer),
     x_auth_token: Optional[str] = Header(None, alias="X-Auth-Token"),
@@ -154,8 +201,9 @@ async def require_moderator_for_guild(
     guild_id: int,
     user: User = Depends(require_user),
 ) -> User:
-    """Dependency: require user can moderate this guild (global admin OR GuildModerator)."""
-    if user.role == "admin":
+    """Dependency: require user can moderate this guild (global admin/moderator OR GuildModerator)."""
+    # Legacy users: global moderator/admin retain full access (no GuildModerator needed)
+    if user.role in ("admin", "moderator"):
         return user
     async with async_session_factory() as session:
         result = await session.execute(

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 import config
-from bot.models import User
+from bot.models import GuildConfig, GuildModerator, User
 from bot.models.base import async_session_factory
 from web.auth import (
     create_access_token,
@@ -87,6 +88,71 @@ async def get_me_optional(user: Optional[User] = Depends(get_current_user)):
     if not user:
         return None
     return {"username": user.username, "role": user.role}
+
+
+@router.get("/my-guilds")
+async def get_my_guilds(user: User = Depends(require_user)):
+    """List guilds the current user can moderate. Verifies with Discord and removes stale GuildModerator entries."""
+    headers = {"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"} if config.INTERNAL_API_SECRET else {}
+
+    # Global admin/moderator: return all guilds the bot is in
+    if user.role in ("admin", "moderator"):
+        if not config.BOT_INTERNAL_URL or not headers:
+            return {"guilds": []}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/discord/guilds",
+                    headers=headers,
+                )
+            if r.status_code != 200:
+                return {"guilds": []}
+            data = r.json()
+            return {"guilds": [{"guild_id": int(g["id"]), "name": g["name"], "slug": None} for g in data.get("guilds", [])]}
+        except Exception:
+            return {"guilds": []}
+
+    # Guild-scoped: get GuildModerator rows, verify each with bot, remove stale
+    if not user.discord_id:
+        return {"guilds": []}
+    if not config.BOT_INTERNAL_URL or not headers:
+        # No bot: return GuildModerator guilds without verification
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(GuildModerator, GuildConfig)
+                .outerjoin(GuildConfig, GuildConfig.guild_id == GuildModerator.guild_id)
+                .where(GuildModerator.user_id == user.id)
+            )
+            rows = result.all()
+            return {"guilds": [{"guild_id": gm.guild_id, "name": gc.name if gc else str(gm.guild_id), "slug": gc.slug if gc else None} for gm, gc in rows]}
+
+    guilds = []
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(GuildModerator).where(GuildModerator.user_id == user.id)
+        )
+        mod_rows = result.scalars().all()
+        for gm in mod_rows:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    r = await client.get(
+                        f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/discord/guilds/{gm.guild_id}/members/{user.discord_id}/has-mod",
+                        headers=headers,
+                    )
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+                if not data.get("has_mod"):
+                    # User no longer has mod role - remove GuildModerator
+                    await session.execute(delete(GuildModerator).where(GuildModerator.id == gm.id))
+                    continue
+            except Exception:
+                continue
+            gc_result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == gm.guild_id))
+            gc = gc_result.scalar_one_or_none()
+            guilds.append({"guild_id": gm.guild_id, "name": gc.name if gc else str(gm.guild_id), "slug": gc.slug if gc else None})
+        await session.commit()
+    return {"guilds": guilds}
 
 
 @router.get("/users", response_model=list[UserResponse])

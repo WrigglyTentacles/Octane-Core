@@ -60,8 +60,8 @@ async def webregister(interaction: discord.Interaction) -> None:
 
     try:
         await interaction.user.send(
-            f"**Octane Bracket Manager** — Click to register for web access:\n{url}\n\n"
-            f"This link expires in 15 minutes."
+            f"**Octane Bracket Manager** — Click to set up your web account:\n{url}\n\n"
+            f"You'll choose a username and password (linked to your Discord). Link expires in 15 minutes."
         )
         await interaction.followup.send(
             "Check your DMs for the registration link!",

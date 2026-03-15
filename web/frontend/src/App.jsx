@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { useGuild } from './GuildContext';
+import { GuildSelector } from './GuildSelector';
 import {
   DndContext,
   closestCenter,
@@ -1730,7 +1731,7 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
 
 function App({ isCurrentPage = false }) {
   const { canEdit, authFetch, user, logout, isAdmin, loading: authLoading } = useAuth();
-  const { apiBase } = useGuild();
+  const { guildId, apiBase } = useGuild();
   const API = apiBase;
   const effectiveCanEdit = isCurrentPage ? false : canEdit;
   const location = useLocation();
@@ -2453,11 +2454,12 @@ function App({ isCurrentPage = false }) {
         </h1>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           <>
-            <Link to="/winners" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Winners</Link>
+            <GuildSelector />
+            <Link to={guildId ? `/s/${guildId}/winners` : '/winners'} style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Winners</Link>
             {isCurrentPage ? (
-              <Link to="/" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Back to brackets</Link>
+              <Link to={guildId ? `/s/${guildId}` : '/'} style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Back to brackets</Link>
             ) : (
-              <Link to="/current" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Current tournament</Link>
+              <Link to={guildId ? `/s/${guildId}/current` : '/current'} style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Current tournament</Link>
             )}
             {user ? (
               <>

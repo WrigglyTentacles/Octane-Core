@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useGuild } from './GuildContext';
+import { GuildSelector } from './GuildSelector';
 
 export default function WinnersPage() {
-  const { apiBase } = useGuild();
-  const { guildId } = useParams();
+  const { guildId, apiBase } = useGuild();
   const [winners, setWinners] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -27,9 +27,12 @@ export default function WinnersPage() {
 
   return (
     <div style={{ padding: 32, maxWidth: 720, margin: '0 auto' }}>
-      <h1 style={{ margin: '0 0 24px', fontSize: 28, color: 'var(--text-primary)' }}>
-        🏆 All-time winners
-      </h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+        <h1 style={{ margin: 0, fontSize: 28, color: 'var(--text-primary)' }}>
+          🏆 All-time winners
+        </h1>
+        <GuildSelector />
+      </div>
       <p style={{ color: 'var(--text-secondary)', marginBottom: 24, fontSize: 14 }}>
         Tournament champions from completed brackets.
       </p>

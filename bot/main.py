@@ -79,6 +79,7 @@ class OctaneBot(commands.Bot):
         self.tree.add_command(tournaments.tournament_group)
         self.tree.add_command(teams.team_group)
         self.tree.add_command(brackets.bracket_group)
+        self.tree.add_command(config_cog.invite)
         self.tree.add_command(config_cog.debug_roles)
         self.tree.add_command(config_cog.sync)
         self.tree.add_command(webregister.webregister)
@@ -91,7 +92,11 @@ class OctaneBot(commands.Bot):
         async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
             msg = "Something went wrong. Check bot logs."
             if isinstance(error, app_commands.errors.CheckFailure):
-                msg = "You don't have permission to use this command. (Need Tournament Commissioner or Admin role)"
+                msg = (
+                    "You don't have permission to use this command. "
+                    "Run `/debug_roles` to diagnose. If you're the server owner, enable **Server Members Intent** "
+                    "in Discord Developer Portal → Bot → Privileged Gateway Intents, then reinvite the bot."
+                )
             else:
                 logger.exception("Command error: %s", error)
             try:
