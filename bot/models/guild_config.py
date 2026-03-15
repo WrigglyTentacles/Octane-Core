@@ -8,7 +8,7 @@ from bot.models.base import Base
 
 
 class GuildConfig(Base):
-    """Per-guild settings: Discord channels, slug, theme."""
+    """Per-guild settings: Discord channels, slug, theme, name."""
 
     __tablename__ = "guild_config"
 
@@ -17,3 +17,9 @@ class GuildConfig(Base):
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)  # Cached guild name
     discord_signup_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     discord_bracket_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Per-guild theme (overrides global SiteSettings when set)
+    site_title: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    accent_color: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    accent_hover: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    bg_primary: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    bg_secondary: Mapped[str | None] = mapped_column(String(32), nullable=True)

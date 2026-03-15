@@ -61,4 +61,11 @@ JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production-use-long-random-st
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = 7
 INITIAL_ADMIN_USERNAME = os.getenv("INITIAL_ADMIN_USERNAME", "admin")
-INITIAL_ADMIN_PASSWORD = os.getenv("INITIAL_ADMIN_PASSWORD", "")  # Set to bootstrap first admin
+INITIAL_ADMIN_PASSWORD = os.getenv("INITIAL_ADMIN_PASSWORD", "")  # Set to bootstrap first global admin
+
+# Global admins: site-wide admin (user management, global settings). Comma-separated usernames.
+GLOBAL_ADMIN_USERNAMES = {
+    x.strip().lower()
+    for x in os.getenv("GLOBAL_ADMIN_USERNAMES", "").split(",")
+    if x.strip()
+}

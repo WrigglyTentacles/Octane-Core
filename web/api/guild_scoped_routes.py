@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.models import (
     GuildConfig,
     RegistrationToken,
+    SiteSettings,
     Tournament,
     User,
 )
@@ -34,6 +35,7 @@ from bot.models.base import async_session_factory
 from web.auth import (
     claim_guild_moderator_with_credentials,
     create_access_token,
+    require_guild_admin,
     require_moderator_for_guild,
     require_user,
 )
@@ -219,7 +221,76 @@ async def register_with_credentials(
     }
 
 
-# --- Guild info (for frontend) ---
+# --- Guild settings (per-guild theme, Discord) ---
+
+GUILD_SETTINGS_DEFAULTS = {
+    "site_title": "Octane Bracket Manager",
+    "accent_color": "#93E9BE",
+    "accent_hover": "#a8f0d0",
+    "bg_primary": "#0f0f12",
+    "bg_secondary": "#18181c",
+}
+
+
+async def _get_guild_settings(guild_id: int):
+    """Get guild theme settings. Falls back to global SiteSettings when guild has no override."""
+    async with async_session_factory() as session:
+        gc_result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == guild_id))
+        gc = gc_result.scalar_one_or_none()
+        global_result = await session.execute(
+            select(SiteSettings).where(SiteSettings.key.in_(["site_title", "accent_color", "accent_hover", "bg_primary", "bg_secondary"]))
+        )
+        global_rows = {r.key: r.value for r in global_result.scalars().all()}
+    return {
+        "site_title": (gc.site_title if gc else None) or global_rows.get("site_title") or GUILD_SETTINGS_DEFAULTS["site_title"],
+        "accent_color": (gc.accent_color if gc else None) or global_rows.get("accent_color") or GUILD_SETTINGS_DEFAULTS["accent_color"],
+        "accent_hover": (gc.accent_hover if gc else None) or global_rows.get("accent_hover") or GUILD_SETTINGS_DEFAULTS["accent_hover"],
+        "bg_primary": (gc.bg_primary if gc else None) or global_rows.get("bg_primary") or GUILD_SETTINGS_DEFAULTS["bg_primary"],
+        "bg_secondary": (gc.bg_secondary if gc else None) or global_rows.get("bg_secondary") or GUILD_SETTINGS_DEFAULTS["bg_secondary"],
+    }
+
+
+@router.get("/settings")
+async def get_guild_settings(guild_id: int = Depends(resolve_guild)):
+    """Get guild theme settings. Falls back to global SiteSettings when guild has no override."""
+    return await _get_guild_settings(guild_id)
+
+
+class GuildSettingsUpdate(BaseModel):
+    site_title: Optional[str] = None
+    accent_color: Optional[str] = None
+    accent_hover: Optional[str] = None
+    bg_primary: Optional[str] = None
+    bg_secondary: Optional[str] = None
+
+
+async def _require_guild_admin_for_settings(
+    guild_id: int = Depends(resolve_guild),
+    user: User = Depends(require_user),
+) -> User:
+    return await require_guild_admin(guild_id, user)
+
+
+@router.patch("/settings")
+async def update_guild_settings(
+    body: GuildSettingsUpdate,
+    guild_id: int = Depends(resolve_guild),
+    user: User = Depends(_require_guild_admin_for_settings),
+):
+    """Update guild theme (guild admin or global admin only)."""
+    async with async_session_factory() as session:
+        result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == guild_id))
+        gc = result.scalar_one_or_none()
+        if not gc:
+            gc = GuildConfig(guild_id=guild_id)
+            session.add(gc)
+            await session.flush()
+        updates = body.model_dump(exclude_unset=True)
+        for key, value in updates.items():
+            if hasattr(gc, key):
+                setattr(gc, key, value or None)
+        await session.commit()
+    return await _get_guild_settings(guild_id)
 
 
 @router.get("/info")

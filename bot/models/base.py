@@ -59,6 +59,11 @@ _MIGRATIONS = [
     "CREATE TABLE IF NOT EXISTS registration_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, token VARCHAR(64) NOT NULL UNIQUE, discord_user_id INTEGER NOT NULL, guild_id INTEGER NOT NULL, expires_at DATETIME NOT NULL)",
     "CREATE INDEX IF NOT EXISTS ix_registration_tokens_token ON registration_tokens(token)",
     "ALTER TABLE registration_tokens ADD COLUMN discord_role VARCHAR(16) DEFAULT 'moderator'",
+    "ALTER TABLE guild_config ADD COLUMN site_title VARCHAR(128)",
+    "ALTER TABLE guild_config ADD COLUMN accent_color VARCHAR(32)",
+    "ALTER TABLE guild_config ADD COLUMN accent_hover VARCHAR(32)",
+    "ALTER TABLE guild_config ADD COLUMN bg_primary VARCHAR(32)",
+    "ALTER TABLE guild_config ADD COLUMN bg_secondary VARCHAR(32)",
     "ALTER TABLE web_users ADD COLUMN discord_id INTEGER",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_web_users_discord_id ON web_users(discord_id)",
 ]

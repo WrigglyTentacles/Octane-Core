@@ -25,6 +25,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/bracket" element={<App />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/s/:guildId/settings" element={<SettingsPage />} />
             <Route path="/s/:guildId/register" element={<RegisterPage />} />
             <Route path="/s/:guildId" element={<App />} />
             <Route path="/s/:guildId/current/*" element={<App isCurrentPage />} />

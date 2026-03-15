@@ -1,11 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useAuth } from './AuthContext';
+import { useGuild } from './GuildContext';
+import { GuildSelector } from './GuildSelector';
 
 const API = '/api';
 
 export default function SettingsPage() {
-  const { authFetch, isAdmin, user: currentUser } = useAuth();
+  const { guildId } = useParams();
+  const { guildId: ctxGuildId, apiBase } = useGuild();
+  const effectiveGuildId = guildId || ctxGuildId;
+  const settingsApi = effectiveGuildId ? `/api/s/${effectiveGuildId}` : API;
+  const { authFetch, isGlobalAdmin, user: currentUser } = useAuth();
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -45,7 +51,7 @@ export default function SettingsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API}/settings`);
+        const res = await fetch(`${settingsApi}/settings`);
         const data = await res.json();
         setSettings(data);
         setForm({
@@ -75,7 +81,7 @@ export default function SettingsPage() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [settingsApi, effectiveGuildId]);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -89,8 +95,8 @@ export default function SettingsPage() {
   }, [authFetch]);
 
   useEffect(() => {
-    if (isAdmin) fetchUsers();
-  }, [isAdmin, fetchUsers]);
+    if (isGlobalAdmin) fetchUsers();
+  }, [isGlobalAdmin, fetchUsers]);
 
   const fetchGuilds = useCallback(async () => {
     if (!discordSettings.enabled) return;
@@ -236,7 +242,7 @@ export default function SettingsPage() {
     setError('');
     setSaving(true);
     try {
-      const res = await authFetch(`${API}/settings`, {
+      const res = await authFetch(`${settingsApi}/settings`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
@@ -263,10 +269,11 @@ export default function SettingsPage() {
     }
   };
 
-  if (!isAdmin) {
+  const canEditSettings = isGlobalAdmin || (effectiveGuildId && currentUser?.role === 'moderator');
+  if (!canEditSettings) {
     return (
       <div style={{ padding: 32, color: 'var(--text-muted)' }}>
-        Admin access required to manage settings.
+        {effectiveGuildId ? 'Guild admin access required to manage this server\'s settings.' : 'Global admin access required to manage site settings.'}
       </div>
     );
   }
@@ -275,9 +282,12 @@ export default function SettingsPage() {
 
   return (
     <div style={{ padding: 32, maxWidth: 560 }}>
-      <h1 style={{ margin: '0 0 24px', fontSize: 24, color: 'var(--text-primary)' }}>
-        Site settings
-      </h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+        <h1 style={{ margin: 0, fontSize: 24, color: 'var(--text-primary)' }}>
+          {effectiveGuildId ? 'Server settings' : 'Site settings'}
+        </h1>
+        {effectiveGuildId && <GuildSelector />}
+      </div>
       <p style={{ color: 'var(--text-secondary)', marginBottom: 24, fontSize: 14 }}>
         Customize the site title and theme colors. Changes apply immediately.
       </p>
@@ -488,6 +498,7 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {isGlobalAdmin && !effectiveGuildId && (
       <div style={{ borderTop: '1px solid var(--border)', marginTop: 40, paddingTop: 32 }}>
         <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>Backup & restore</h2>
         <p style={{ color: 'var(--text-secondary)', marginBottom: 16, fontSize: 14 }}>
@@ -553,7 +564,9 @@ export default function SettingsPage() {
           </label>
         </div>
       </div>
+      )}
 
+      {isGlobalAdmin && !effectiveGuildId && (
       <div style={{ borderTop: '1px solid var(--border)', marginTop: 40, paddingTop: 32 }}>
         <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text-primary)' }}>User management</h2>
         <p style={{ color: 'var(--text-secondary)', marginBottom: 20, fontSize: 14 }}>
@@ -633,9 +646,10 @@ export default function SettingsPage() {
           </table>
         </div>
       </div>
+      )}
 
       <p style={{ marginTop: 24 }}>
-        <Link to="/" style={{ color: 'var(--accent)' }}>← Back to brackets</Link>
+        <Link to={effectiveGuildId ? `/s/${effectiveGuildId}` : '/'} style={{ color: 'var(--accent)' }}>← Back to brackets</Link>
       </p>
     </div>
   );

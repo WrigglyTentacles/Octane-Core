@@ -5,7 +5,7 @@ import { useMyGuilds } from './useMyGuilds';
 
 /** Dropdown to switch between guilds the user can moderate. Shown when user has edit rights and guilds. */
 export function GuildSelector() {
-  const { user, canEdit } = useAuth();
+  const { user, canEdit, isGlobalAdmin } = useAuth();
   const { guilds, loading } = useMyGuilds();
   const navigate = useNavigate();
   const location = useLocation();
@@ -15,16 +15,16 @@ export function GuildSelector() {
 
   // Guild-scoped moderators: redirect from / to a guild so they only see that guild's tournaments
   useEffect(() => {
-    if (!user || !canEdit || loading || user.role === 'admin') return;
+    if (!user || !canEdit || loading || isGlobalAdmin) return;
     if (isOnGuildRoute) return;
     if (guilds.length === 0) return;
     const g = guilds[0];
     if (g?.guild_id) navigate(`/s/${g.guild_id}${location.pathname === '/' ? '' : location.pathname}`, { replace: true });
-  }, [user, canEdit, loading, guilds, isOnGuildRoute, navigate, location.pathname]);
+  }, [user, canEdit, loading, guilds, isOnGuildRoute, navigate, location.pathname, isGlobalAdmin]);
 
   if (!user || !canEdit || loading || guilds.length === 0) return null;
 
-  const isAdmin = user.role === 'admin';
+  const isGlobalAdmin = user.is_global_admin === true || user.role === 'admin';
 
   // Build path for a guild: /s/{guildId} + current subpath (e.g. /current, /winners)
   const subpath = location.pathname.replace(/^\/s\/\d+/, '') || '';
@@ -36,7 +36,7 @@ export function GuildSelector() {
     navigate(target);
   };
 
-  const value = currentGuildId || (isAdmin ? '' : guilds[0]?.guild_id?.toString() ?? '');
+  const value = currentGuildId || (isGlobalAdmin ? '' : guilds[0]?.guild_id?.toString() ?? '');
 
   return (
     <select
@@ -45,7 +45,7 @@ export function GuildSelector() {
       style={{ padding: '8px 12px', fontSize: 14, minWidth: 160 }}
       title="Switch server"
     >
-      {isAdmin && <option value="">Global</option>}
+      {isGlobalAdmin && <option value="">Global</option>}
       {guilds.map((g) => (
         <option key={g.guild_id} value={String(g.guild_id)}>
           {g.name}

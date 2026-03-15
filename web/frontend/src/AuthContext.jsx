@@ -11,7 +11,7 @@ export function AuthProvider({ children }) {
   const token = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null;
 
   const canEdit = user && (user.role === 'moderator' || user.role === 'admin');
-  const isAdmin = user && user.role === 'admin';
+  const isGlobalAdmin = user && (user.is_global_admin === true || user.role === 'admin');
 
   const fetchUser = useCallback(async () => {
     const t = localStorage.getItem(TOKEN_KEY);
@@ -58,7 +58,7 @@ export function AuthProvider({ children }) {
     const data = await res.json();
     if (!res.ok) throw new Error(data?.detail || 'Login failed');
     localStorage.setItem(TOKEN_KEY, data.access_token);
-    setUser({ username: data.username, role: data.role });
+    await fetchUser(); // Refetch to get is_global_admin
     return data;
   };
 
@@ -83,7 +83,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, canEdit, isAdmin, login, logout, authFetch, fetchUser }}>
+    <AuthContext.Provider value={{ user, loading, canEdit, isGlobalAdmin, login, logout, authFetch, fetchUser }}>
       {children}
     </AuthContext.Provider>
   );

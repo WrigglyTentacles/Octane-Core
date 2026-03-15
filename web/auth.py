@@ -114,17 +114,17 @@ async def claim_guild_moderator_with_credentials(
                 raise ValueError("Username already taken")
             user.username = username
             user.password_hash = hash_password(password)
-            # Upgrade role: user -> moderator/admin, moderator -> admin (when registering with admin token)
-            if user.role == "user" or (user.role == "moderator" and role == "admin"):
-                user.role = role
+            # Upgrade to moderator for canEdit (never set admin - that's global only)
+            if user.role == "user":
+                user.role = "moderator"
         else:
-            # New user - username must be unique
+            # New user - username must be unique. Guild-scoped users get moderator (not admin)
             if other_user:
                 raise ValueError("Username already taken")
             user = User(
                 username=username,
                 password_hash=hash_password(password),
-                role=role,  # admin or moderator from Discord (guild admin -> site admin)
+                role="moderator",  # Guild-scoped; GuildModerator.role = admin or moderator
                 discord_id=discord_id,
             )
             session.add(user)
@@ -167,19 +167,17 @@ async def get_current_user(
 
 
 async def promote_guild_moderator_if_needed(user: User) -> User:
-    """If user has role=user but GuildModerator exists, upgrade to moderator or admin (for existing registrations)."""
+    """If user has role=user but GuildModerator exists, upgrade to moderator (for existing registrations)."""
     if user.role != "user":
         return user
     async with async_session_factory() as session:
         result = await session.execute(
             select(GuildModerator).where(GuildModerator.user_id == user.id)
         )
-        gms = result.scalars().all()
-        if gms:
-            role = "admin" if any(gm.role == "admin" for gm in gms) else "moderator"
-            await session.execute(update(User).where(User.id == user.id).values(role=role))
+        if result.scalar_one_or_none():
+            await session.execute(update(User).where(User.id == user.id).values(role="moderator"))
             await session.commit()
-            user.role = role
+            user.role = "moderator"
     return user
 
 
@@ -210,6 +208,13 @@ def require_admin(user: User) -> User:
     return user
 
 
+def is_global_admin(user: User) -> bool:
+    """True if user is a global (site-wide) admin: User.role=admin or in GLOBAL_ADMIN_USERNAMES."""
+    if user.role == "admin":
+        return True
+    return user.username.lower() in config.GLOBAL_ADMIN_USERNAMES
+
+
 async def require_moderator_user(
     user: User = Depends(require_user),
 ) -> User:
@@ -221,10 +226,11 @@ async def require_moderator_for_guild(
     guild_id: int,
     user: User = Depends(require_user),
 ) -> User:
-    """Dependency: require user can moderate this guild (global admin/moderator OR GuildModerator)."""
-    # Legacy users: global moderator/admin retain full access (no GuildModerator needed)
-    if user.role in ("admin", "moderator"):
+    """Dependency: require user can moderate this guild (global admin OR GuildModerator)."""
+    if is_global_admin(user):
         return user
+    if user.role == "moderator":
+        return user  # Guild-scoped moderators have User.role=moderator
     async with async_session_factory() as session:
         result = await session.execute(
             select(GuildModerator).where(
@@ -241,8 +247,43 @@ async def require_moderator_for_guild(
     )
 
 
+async def require_guild_admin(
+    guild_id: int,
+    user: User = Depends(require_user),
+) -> User:
+    """Dependency: require user is guild admin or global admin (for guild settings)."""
+    if is_global_admin(user):
+        return user
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(GuildModerator).where(
+                GuildModerator.user_id == user.id,
+                GuildModerator.guild_id == guild_id,
+            )
+        )
+        gm = result.scalar_one_or_none()
+        if gm and gm.role == "admin":
+            return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Guild admin access required",
+    )
+
+
 async def require_admin_user(
     user: User = Depends(require_user),
 ) -> User:
-    """Dependency: require logged-in admin."""
+    """Dependency: require logged-in admin (legacy alias)."""
     return require_admin(user)
+
+
+async def require_global_admin_user(
+    user: User = Depends(require_user),
+) -> User:
+    """Dependency: require logged-in global (site-wide) admin."""
+    if not is_global_admin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Global admin access required",
+        )
+    return user

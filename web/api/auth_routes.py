@@ -16,8 +16,9 @@ from web.auth import (
     get_current_user,
     get_user_by_username,
     hash_password,
+    is_global_admin,
     promote_guild_moderator_if_needed,
-    require_admin_user,
+    require_global_admin_user,
     require_user,
     verify_password,
 )
@@ -40,6 +41,7 @@ class LoginResponse(BaseModel):
 class UserResponse(BaseModel):
     username: str
     role: str
+    is_global_admin: bool = False
 
 
 class CreateUserRequest(BaseModel):
@@ -81,7 +83,7 @@ async def login(body: LoginRequest):
 async def get_me(user: User = Depends(require_user)):
     """Get current authenticated user."""
     user = await promote_guild_moderator_if_needed(user)
-    return UserResponse(username=user.username, role=user.role)
+    return UserResponse(username=user.username, role=user.role, is_global_admin=is_global_admin(user))
 
 
 @router.get("/me/optional")
@@ -90,7 +92,7 @@ async def get_me_optional(user: Optional[User] = Depends(get_current_user)):
     if not user:
         return None
     user = await promote_guild_moderator_if_needed(user)
-    return {"username": user.username, "role": user.role}
+    return {"username": user.username, "role": user.role, "is_global_admin": is_global_admin(user)}
 
 
 @router.get("/my-guilds")
@@ -160,16 +162,16 @@ async def get_my_guilds(user: User = Depends(require_user)):
 
 
 @router.get("/users", response_model=list[UserResponse])
-async def list_users(admin: User = Depends(require_admin_user)):
+async def list_users(admin: User = Depends(require_global_admin_user)):
     """List all users (admin only)."""
     async with async_session_factory() as session:
         result = await session.execute(select(User).order_by(User.username))
         users = result.scalars().all()
-        return [UserResponse(username=u.username, role=u.role) for u in users]
+        return [UserResponse(username=u.username, role=u.role, is_global_admin=is_global_admin(u)) for u in users]
 
 
 @router.post("/users", response_model=UserResponse)
-async def create_user(body: CreateUserRequest, admin: User = Depends(require_admin_user)):
+async def create_user(body: CreateUserRequest, admin: User = Depends(require_global_admin_user)):
     """Create a new user (admin only)."""
     if body.role not in ("user", "moderator", "admin"):
         raise HTTPException(400, "Invalid role")
@@ -185,7 +187,7 @@ async def create_user(body: CreateUserRequest, admin: User = Depends(require_adm
         session.add(user)
         await session.commit()
         await session.refresh(user)
-        return UserResponse(username=user.username, role=user.role)
+        return UserResponse(username=user.username, role=user.role, is_global_admin=is_global_admin(user))
 
 
 class UpdateUserRequest(BaseModel):
@@ -194,7 +196,7 @@ class UpdateUserRequest(BaseModel):
 
 
 @router.patch("/users/{username}")
-async def update_user(username: str, body: UpdateUserRequest, admin: User = Depends(require_admin_user)):
+async def update_user(username: str, body: UpdateUserRequest, admin: User = Depends(require_global_admin_user)):
     """Update user password or role (admin only)."""
     async with async_session_factory() as session:
         result = await session.execute(select(User).where(User.username == username))
@@ -212,7 +214,7 @@ async def update_user(username: str, body: UpdateUserRequest, admin: User = Depe
 
 
 @router.delete("/users/{username}")
-async def delete_user(username: str, admin: User = Depends(require_admin_user)):
+async def delete_user(username: str, admin: User = Depends(require_global_admin_user)):
     """Delete a user (admin only). Cannot delete self."""
     if username == admin.username:
         raise HTTPException(400, "Cannot delete your own account")

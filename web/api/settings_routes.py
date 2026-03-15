@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from bot.models import SiteSettings
 from bot.models.base import async_session_factory
-from web.auth import require_admin_user, require_moderator_user
+from web.auth import require_global_admin_user, require_moderator_user
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -71,7 +71,7 @@ async def get_settings():
 
 
 @router.patch("", response_model=SettingsResponse)
-async def update_settings(body: SettingsUpdate, admin=Depends(require_admin_user)):
+async def update_settings(body: SettingsUpdate, admin=Depends(require_global_admin_user)):
     """Update site settings (admin only)."""
     updates = body.model_dump(exclude_unset=True)
     for key, value in updates.items():
@@ -87,7 +87,7 @@ async def update_settings(body: SettingsUpdate, admin=Depends(require_admin_user
 
 
 @router.get("/export")
-async def export_settings(admin=Depends(require_admin_user)):
+async def export_settings(admin=Depends(require_global_admin_user)):
     """Export all site settings as JSON backup (admin only)."""
     async with async_session_factory() as session:
         result = await session.execute(select(SiteSettings))
@@ -136,7 +136,7 @@ class DiscordBracketUpdate(BaseModel):
 
 @router.patch("/discord")
 async def update_discord_bracket(
-    body: DiscordBracketUpdate, admin=Depends(require_admin_user)
+    body: DiscordBracketUpdate, admin=Depends(require_global_admin_user)
 ):
     """Update bracket post channel (admin only)."""
     updates = body.model_dump(exclude_unset=True)
@@ -188,7 +188,7 @@ async def get_discord_channels(
 
 
 @router.post("/import")
-async def import_settings(body: SettingsImport, admin=Depends(require_admin_user)):
+async def import_settings(body: SettingsImport, admin=Depends(require_global_admin_user)):
     """Restore site settings from a JSON backup (admin only). Overwrites existing keys."""
     async with async_session_factory() as session:
         result = await session.execute(select(SiteSettings))

@@ -1731,7 +1731,7 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
 }
 
 function App({ isCurrentPage = false }) {
-  const { canEdit, authFetch, user, logout, isAdmin, loading: authLoading } = useAuth();
+  const { canEdit, authFetch, user, logout, isGlobalAdmin, loading: authLoading } = useAuth();
   const { guildId, apiBase } = useGuild();
   const API = apiBase; // Guild-scoped: list, current, winners, create
   const API_GLOBAL = '/api'; // Global: tournament detail, bracket, settings (not under /api/s/:guild)
@@ -1872,7 +1872,8 @@ function App({ isCurrentPage = false }) {
   }, [menuOpen]);
 
   useEffect(() => {
-    fetch(`${API_GLOBAL}/settings`).then((r) => r.text()).then((text) => {
+    const url = guildId ? `${API}/settings` : `${API_GLOBAL}/settings`;
+    fetch(url).then((r) => r.text()).then((text) => {
       let s = {};
       try {
         s = text ? JSON.parse(text) : {};
@@ -1885,7 +1886,7 @@ function App({ isCurrentPage = false }) {
       if (s.bg_primary) document.documentElement.style.setProperty('--bg-primary', s.bg_primary);
       if (s.bg_secondary) document.documentElement.style.setProperty('--bg-secondary', s.bg_secondary);
     }).catch(() => {});
-  }, []);
+  }, [guildId, API]);
 
   useEffect(() => {
     if (isCurrentPage) return; // Public page, no login required
@@ -2466,8 +2467,8 @@ function App({ isCurrentPage = false }) {
             {user ? (
               <>
                 <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>{user.username} ({user.role})</span>
-                {isAdmin && (
-                  <Link to="/settings" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Settings</Link>
+                {(isGlobalAdmin || (canEdit && guildId)) && (
+                  <Link to={guildId ? `/s/${guildId}/settings` : '/settings'} style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Settings</Link>
                 )}
                 <button onClick={logout} style={{ padding: '8px 14px', fontSize: 14 }}>Logout</button>
               </>
