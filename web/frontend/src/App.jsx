@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
+import { useGuild } from './GuildContext';
 import {
   DndContext,
   closestCenter,
@@ -20,7 +21,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
-const API = '/api';
+// API base: /api for global, /api/s/:guildId for guild-scoped
 const STORAGE_KEY = 'octane-selected-tournament';
 const TAB_STORAGE_KEY = 'octane-selected-tab';
 const POLL_INTERVAL_STORAGE_KEY = 'octane-poll-interval';
@@ -1729,6 +1730,8 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
 
 function App({ isCurrentPage = false }) {
   const { canEdit, authFetch, user, logout, isAdmin, loading: authLoading } = useAuth();
+  const { apiBase } = useGuild();
+  const API = apiBase;
   const effectiveCanEdit = isCurrentPage ? false : canEdit;
   const location = useLocation();
   const navigate = useNavigate();

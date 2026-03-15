@@ -51,6 +51,15 @@ _MIGRATIONS = [
     "ALTER TABLE tournaments ADD COLUMN archived INTEGER DEFAULT 0",
     # Recover from failed migration: ensure players table exists (e.g. if DROP succeeded but RENAME failed)
     "CREATE TABLE IF NOT EXISTS players (discord_id INTEGER NOT NULL PRIMARY KEY, display_name VARCHAR(128), epic_username VARCHAR(64), epic_id VARCHAR(32))",
+    # Multi-server: guild_config, guild_moderators, registration_tokens, User.discord_id
+    "CREATE TABLE IF NOT EXISTS guild_config (guild_id INTEGER NOT NULL PRIMARY KEY, slug VARCHAR(64), name VARCHAR(128), discord_signup_channel_id INTEGER, discord_bracket_channel_id INTEGER)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_guild_config_slug ON guild_config(slug)",
+    "CREATE TABLE IF NOT EXISTS guild_moderators (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES web_users(id) ON DELETE CASCADE, guild_id INTEGER NOT NULL, role VARCHAR(16) DEFAULT 'moderator')",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_guild_moderator_user_guild ON guild_moderators(user_id, guild_id)",
+    "CREATE TABLE IF NOT EXISTS registration_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, token VARCHAR(64) NOT NULL UNIQUE, discord_user_id INTEGER NOT NULL, guild_id INTEGER NOT NULL, expires_at DATETIME NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS ix_registration_tokens_token ON registration_tokens(token)",
+    "ALTER TABLE web_users ADD COLUMN discord_id INTEGER",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_web_users_discord_id ON web_users(discord_id)",
 ]
 
 

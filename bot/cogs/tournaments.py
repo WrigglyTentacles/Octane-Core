@@ -73,9 +73,10 @@ async def get_tournament(session: AsyncSession, tournament_id: int, guild_id: in
     return result.scalar_one_or_none()
 
 
-def _build_signup_embed(t: Tournament, count: int) -> discord.Embed:
-    """Build the signup embed for a tournament."""
-    import config
+def _build_signup_embed(t: Tournament, count: int, guild_id: int) -> discord.Embed:
+    """Build the signup embed for a tournament. Uses guild-aware URL."""
+    from web.api.web_urls import bracket_url
+
     deadline_line = ""
     if t.registration_deadline:
         dt = t.registration_deadline
@@ -84,8 +85,9 @@ def _build_signup_embed(t: Tournament, count: int) -> discord.Embed:
         ts = int(dt.timestamp())
         deadline_line = f"**Signup deadline:** <t:{ts}:F> (<t:{ts}:R>)\n\n"
     current_link = ""
-    if config.SITE_URL:
-        current_link = f"\n\n**View bracket:** {config.SITE_URL}/current"
+    url = bracket_url(guild_id)
+    if url:
+        current_link = f"\n\n**View bracket:** {url}"
     embed = discord.Embed(
         title=f"📋 {t.name}",
         description=(
@@ -447,7 +449,8 @@ async def post(
             select(Registration).where(Registration.tournament_id == tournament_id)
         )
         count = len(reg_count.scalars().all())
-        embed = _build_signup_embed(t, count)
+        guild_id = t.guild_id if t.guild_id else (interaction.guild_id or 0)
+        embed = _build_signup_embed(t, count, guild_id)
 
         # Retire old signup messages so only this post is active (avoids duplicate posts confusion)
         old_result = await session.execute(
@@ -562,7 +565,8 @@ async def edit(
             reg_count = len(
                 (await session.execute(select(Registration).where(Registration.tournament_id == tournament_id))).scalars().all()
             )
-            embed = _build_signup_embed(t, reg_count)
+            guild_id = t.guild_id if t.guild_id else (interaction.guild_id or 0)
+            embed = _build_signup_embed(t, reg_count, guild_id)
             for sm in signup_msgs:
                 try:
                     ch = interaction.client.get_channel(sm.channel_id) or await interaction.client.fetch_channel(sm.channel_id)

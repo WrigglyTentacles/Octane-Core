@@ -8,7 +8,7 @@ from discord.ext import commands
 
 import config
 from bot.checks import admin_only, mod_or_higher
-from bot.cogs import registration, mmr, tournaments, teams, brackets, config_cog
+from bot.cogs import registration, mmr, tournaments, teams, brackets, config_cog, webregister
 from bot.listeners import signup
 from bot.models import init_db
 from bot.services.rl_api import RLAPIService
@@ -30,6 +30,24 @@ class OctaneBot(commands.Bot):
             chunk_guilds_at_startup=True,  # Populate member cache so role checks work
         )
         self.rl_service = None
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        """Post hint when bot joins a new server."""
+        if not config.SITE_URL:
+            return
+        msg = (
+            "**Octane Bracket Manager** — Thanks for adding me! "
+            "Server moderators and admins: use **`/webregister`** to get your web dashboard link. I'll DM you the link."
+        )
+        try:
+            channel = guild.system_channel or next(
+                (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages),
+                None,
+            )
+            if channel:
+                await channel.send(msg)
+        except Exception as e:
+            logger.warning("Could not post on_guild_join to %s: %s", guild.name, e)
 
     async def on_ready(self) -> None:
         logger.info("Bot ready: %s (ID: %s)", self.user, self.user.id if self.user else "?")
@@ -63,6 +81,7 @@ class OctaneBot(commands.Bot):
         self.tree.add_command(brackets.bracket_group)
         self.tree.add_command(config_cog.debug_roles)
         self.tree.add_command(config_cog.sync)
+        self.tree.add_command(webregister.webregister)
 
         # Sync commands
         await self.tree.sync()

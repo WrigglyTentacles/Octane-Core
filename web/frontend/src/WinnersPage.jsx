@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-
-const API = '/api';
+import { Link, useParams } from 'react-router-dom';
+import { useGuild } from './GuildContext';
 
 export default function WinnersPage() {
+  const { apiBase } = useGuild();
+  const { guildId } = useParams();
   const [winners, setWinners] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -11,7 +12,7 @@ export default function WinnersPage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API}/winners`);
+        const res = await fetch(`${apiBase}/winners`);
         const data = await res.json();
         setWinners(Array.isArray(data) ? data : []);
       } catch (err) {
@@ -20,7 +21,7 @@ export default function WinnersPage() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [apiBase]);
 
   if (loading) return <div style={{ padding: 32 }}>Loading...</div>;
 
@@ -69,7 +70,7 @@ export default function WinnersPage() {
         </div>
       )}
       <p style={{ marginTop: 24 }}>
-        <Link to="/" style={{ color: 'var(--accent)' }}>← Back to brackets</Link>
+        <Link to={guildId ? `/s/${guildId}` : '/'} style={{ color: 'var(--accent)' }}>← Back to brackets</Link>
       </p>
     </div>
   );

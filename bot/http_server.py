@@ -23,8 +23,10 @@ logger = logging.getLogger("octane.http")
 SIGNUP_EMOJI = "📝"
 
 
-def _build_signup_embed(t: Tournament, count: int) -> discord.Embed:
-    """Build signup embed (same as tournaments cog)."""
+def _build_signup_embed(t: Tournament, count: int, guild_id: int) -> discord.Embed:
+    """Build signup embed (same as tournaments cog). Uses guild-aware URL."""
+    from web.api.web_urls import bracket_url
+
     deadline_line = ""
     if t.registration_deadline:
         dt = t.registration_deadline
@@ -33,8 +35,9 @@ def _build_signup_embed(t: Tournament, count: int) -> discord.Embed:
         ts = int(dt.timestamp())
         deadline_line = f"**Signup deadline:** <t:{ts}:F> (<t:{ts}:R>)\n\n"
     current_link = ""
-    if config.SITE_URL:
-        current_link = f"\n\n**View bracket:** {config.SITE_URL}/current"
+    url = bracket_url(guild_id)
+    if url:
+        current_link = f"\n\n**View bracket:** {url}"
     embed = discord.Embed(
         title=f"📋 {t.name}",
         description=(
@@ -91,7 +94,7 @@ async def _handle_post_signup(request: aiohttp.web.Request) -> aiohttp.web.Respo
             select(Registration).where(Registration.tournament_id == tournament_id)
         )
         count = len(reg_count.scalars().all())
-        embed_dict = _build_signup_embed(t, count)
+        embed_dict = _build_signup_embed(t, count, guild_id)
 
         # Retire old signup messages
         await session.execute(

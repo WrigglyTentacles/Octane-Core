@@ -9,6 +9,9 @@ from bot.models.signup_message import TournamentSignupMessage
 from bot.models.bracket import Bracket, BracketMatch  # noqa: F401 - for metadata
 from bot.models.user import User  # noqa: F401 - for metadata
 from bot.models.site_settings import SiteSettings  # noqa: F401 - for metadata
+from bot.models.guild_config import GuildConfig  # noqa: F401 - for metadata
+from bot.models.guild_moderator import GuildModerator  # noqa: F401 - for metadata
+from bot.models.registration_token import RegistrationToken  # noqa: F401 - for metadata
 
 __all__ = [
     "Base",
@@ -23,6 +26,9 @@ __all__ = [
     "BracketMatch",
     "User",
     "SiteSettings",
+    "GuildConfig",
+    "GuildModerator",
+    "RegistrationToken",
     "get_async_session",
     "init_db",
 ]

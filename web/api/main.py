@@ -18,6 +18,7 @@ from web.api.routes import router as api_router, _refresh_player_names_from_disc
 from web.api.utils import player_display_name
 from web.api.auth_routes import router as auth_router
 from web.api.settings_routes import router as settings_router
+from web.api.guild_scoped_routes import router as guild_scoped_router
 
 
 @asynccontextmanager
@@ -57,6 +58,7 @@ app.add_middleware(
 app.include_router(api_router)
 app.include_router(auth_router)
 app.include_router(settings_router)
+app.include_router(guild_scoped_router, prefix="/api/s/{guild_id_or_slug}")
 
 
 @app.get("/api/tournaments/{tournament_id}/bracket")

@@ -12,6 +12,9 @@ venv/
 node_modules/
 web/frontend/dist/
 
+# Backups (local only)
+backups/
+
 # IDE
 .idea/
 .vscode/
