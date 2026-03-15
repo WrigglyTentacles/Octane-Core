@@ -16,7 +16,9 @@ class GuildConfig(Base):
     slug: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)  # Cached guild name
     discord_signup_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    discord_signup_channel_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     discord_bracket_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    discord_bracket_channel_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Per-guild theme (overrides global SiteSettings when set)
     site_title: Mapped[str | None] = mapped_column(String(128), nullable=True)
     accent_color: Mapped[str | None] = mapped_column(String(32), nullable=True)

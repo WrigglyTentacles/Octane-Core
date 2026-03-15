@@ -64,6 +64,8 @@ _MIGRATIONS = [
     "ALTER TABLE guild_config ADD COLUMN accent_hover VARCHAR(32)",
     "ALTER TABLE guild_config ADD COLUMN bg_primary VARCHAR(32)",
     "ALTER TABLE guild_config ADD COLUMN bg_secondary VARCHAR(32)",
+    "ALTER TABLE guild_config ADD COLUMN discord_signup_channel_name VARCHAR(128)",
+    "ALTER TABLE guild_config ADD COLUMN discord_bracket_channel_name VARCHAR(128)",
     "ALTER TABLE web_users ADD COLUMN discord_id INTEGER",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_web_users_discord_id ON web_users(discord_id)",
 ]

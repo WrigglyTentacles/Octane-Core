@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 
 from bot.checks import admin_only, mod_or_higher
-from bot.models import Player, Registration, SiteSettings, Team, Tournament, TournamentSignupMessage
+from bot.models import GuildConfig, Player, Registration, Team, Tournament, TournamentSignupMessage
 from bot.models.base import get_async_session
 from bot.services.rl_api import RLAPIService
 import config
@@ -349,17 +349,14 @@ async def set_signup_channel_cmd(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
 
     async for session in get_async_session():
-        for key, value in [
-            ("discord_guild_id", str(interaction.guild_id)),
-            ("discord_signup_channel_id", str(interaction.channel.id)),
-            ("discord_signup_channel_name", interaction.channel.name),
-        ]:
-            result = await session.execute(select(SiteSettings).where(SiteSettings.key == key))
-            row = result.scalar_one_or_none()
-            if row:
-                row.value = value
-            else:
-                session.add(SiteSettings(key=key, value=value))
+        result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == interaction.guild_id))
+        gc = result.scalar_one_or_none()
+        if not gc:
+            gc = GuildConfig(guild_id=interaction.guild_id, name=interaction.guild.name)
+            session.add(gc)
+            await session.flush()
+        gc.discord_signup_channel_id = interaction.channel.id
+        gc.discord_signup_channel_name = interaction.channel.name
         await session.commit()
         break
 

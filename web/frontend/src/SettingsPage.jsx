@@ -61,7 +61,8 @@ export default function SettingsPage() {
           bg_primary: data.bg_primary || '',
           bg_secondary: data.bg_secondary || '',
         });
-        const dRes = await fetch(`${API}/settings/discord`);
+        const discordUrl = effectiveGuildId ? `${settingsApi}/settings/discord` : `${API}/settings/discord`;
+        const dRes = await fetch(discordUrl);
         const dData = await dRes.json();
         setDiscordSettings({
           enabled: !!dData.enabled,
@@ -73,7 +74,7 @@ export default function SettingsPage() {
           discord_bracket_channel_id: dData.discord_bracket_channel_id || '',
           discord_bracket_channel_name: dData.discord_bracket_channel_name || '',
         });
-        setBracketGuildId(dData.discord_bracket_guild_id || '');
+        setBracketGuildId(effectiveGuildId || dData.discord_bracket_guild_id || '');
         setBracketChannelId(dData.discord_bracket_channel_id || '');
       } catch (err) {
         setError(err.message);
@@ -141,14 +142,15 @@ export default function SettingsPage() {
     setError('');
     try {
       const selectedChannel = channels.find((c) => c.id === bracketChannelId);
-      const res = await authFetch(`${API}/settings/discord`, {
+      const discordUrl = effectiveGuildId ? `${settingsApi}/settings/discord` : `${API}/settings/discord`;
+      const res = await authFetch(discordUrl, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          discord_bracket_guild_id: bracketGuildId || '',
-          discord_bracket_channel_id: bracketChannelId || '',
-          discord_bracket_channel_name: selectedChannel?.name || '',
-        }),
+        body: JSON.stringify(
+          effectiveGuildId
+            ? { discord_bracket_channel_id: bracketChannelId || '', discord_bracket_channel_name: selectedChannel?.name || '' }
+            : { discord_bracket_guild_id: bracketGuildId || '', discord_bracket_channel_id: bracketChannelId || '', discord_bracket_channel_name: selectedChannel?.name || '' }
+        ),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -452,6 +454,7 @@ export default function SettingsPage() {
           </p>
           <form onSubmit={handleSaveBracketChannel} style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end', marginBottom: 12 }}>
+              {!effectiveGuildId && (
               <div>
                 <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-muted)' }}>Server</label>
                 <select
@@ -465,6 +468,7 @@ export default function SettingsPage() {
                   ))}
                 </select>
               </div>
+              )}
               <div>
                 <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-muted)' }}>Channel</label>
                 <select

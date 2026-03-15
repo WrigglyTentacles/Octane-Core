@@ -1866,10 +1866,11 @@ function App({ isCurrentPage = false }) {
 
   useEffect(() => {
     if (!menuOpen) return;
-    fetch(`${API_GLOBAL}/settings/discord`).then((r) => r.ok ? r.json() : {}).then((d) => {
+    const discordUrl = guildId ? `${API}/settings/discord` : `${API_GLOBAL}/settings/discord`;
+    fetch(discordUrl).then((r) => r.ok ? r.json() : {}).then((d) => {
       setDiscordConfigReady(!!(d?.enabled && d?.discord_guild_id && d?.discord_signup_channel_id));
     }).catch(() => setDiscordConfigReady(false));
-  }, [menuOpen]);
+  }, [menuOpen, guildId, API]);
 
   useEffect(() => {
     const url = guildId ? `${API}/settings` : `${API_GLOBAL}/settings`;
@@ -2820,7 +2821,8 @@ function App({ isCurrentPage = false }) {
                               if (newTournamentDeadline) {
                                 body.registration_deadline = new Date(newTournamentDeadline).toISOString();
                               }
-                              const res = await authFetch(`${API}/tournaments`, {
+                              if (guildId) body.guild_id = parseInt(guildId, 10);
+                              const res = await authFetch(`${API_GLOBAL}/tournaments`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify(body),

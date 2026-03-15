@@ -293,6 +293,74 @@ async def update_guild_settings(
     return await _get_guild_settings(guild_id)
 
 
+# --- Guild Discord settings (per-guild signup/bracket channels) ---
+
+
+async def _get_guild_discord_settings(guild_id: int):
+    """Get guild Discord config (signup channel, bracket channel)."""
+    import httpx
+    import config
+    enabled = bool(config.INTERNAL_API_SECRET)
+    invite_url = ""
+    if enabled and config.INTERNAL_API_SECRET and config.BOT_INTERNAL_URL:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(
+                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/discord/invite-url",
+                    headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+                )
+            if r.status_code == 200:
+                invite_url = r.json().get("url", "")
+        except Exception:
+            pass
+    async with async_session_factory() as session:
+        result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == guild_id))
+        gc = result.scalar_one_or_none()
+    return {
+        "enabled": enabled,
+        "invite_url": invite_url,
+        "discord_guild_id": str(guild_id),
+        "discord_signup_channel_id": str(gc.discord_signup_channel_id) if gc and gc.discord_signup_channel_id else "",
+        "discord_signup_channel_name": (gc.discord_signup_channel_name or "") if gc else "",
+        "discord_bracket_guild_id": str(guild_id),
+        "discord_bracket_channel_id": str(gc.discord_bracket_channel_id) if gc and gc.discord_bracket_channel_id else "",
+        "discord_bracket_channel_name": (gc.discord_bracket_channel_name or "") if gc else "",
+    }
+
+
+@router.get("/settings/discord")
+async def get_guild_discord_settings(guild_id: int = Depends(resolve_guild)):
+    """Get guild Discord config (signup channel, bracket channel)."""
+    return await _get_guild_discord_settings(guild_id)
+
+
+class GuildDiscordUpdate(BaseModel):
+    discord_bracket_channel_id: Optional[str] = None
+    discord_bracket_channel_name: Optional[str] = None
+
+
+@router.patch("/settings/discord")
+async def update_guild_discord_settings(
+    body: GuildDiscordUpdate,
+    guild_id: int = Depends(resolve_guild),
+    user: User = Depends(_require_guild_admin_for_settings),
+):
+    """Update guild bracket channel (guild admin or global admin only). Signup channel is set via /tournament set-signup-channel in Discord."""
+    async with async_session_factory() as session:
+        result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == guild_id))
+        gc = result.scalar_one_or_none()
+        if not gc:
+            gc = GuildConfig(guild_id=guild_id)
+            session.add(gc)
+            await session.flush()
+        if body.discord_bracket_channel_id is not None:
+            gc.discord_bracket_channel_id = int(body.discord_bracket_channel_id) if body.discord_bracket_channel_id else None
+        if body.discord_bracket_channel_name is not None:
+            gc.discord_bracket_channel_name = body.discord_bracket_channel_name or None
+        await session.commit()
+    return await _get_guild_discord_settings(guild_id)
+
+
 @router.get("/info")
 async def get_guild_info(guild_id: int = Depends(resolve_guild)):
     """Get guild display info (name, slug)."""

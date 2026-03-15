@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 from bot.models import (
     Bracket,
     BracketMatch,
+    GuildConfig,
     Player,
     Registration,
     SiteSettings,
@@ -54,41 +55,49 @@ async def _refresh_player_names_from_discord(player_ids: list[int]) -> None:
 
 
 async def _get_discord_bracket_channel(session, t) -> tuple[int | None, int | None]:
-    """Resolve guild_id and channel_id for bracket posts. Prefer bracket channel, fallback to signup."""
-    settings_result = await session.execute(
-        select(SiteSettings).where(
-            SiteSettings.key.in_(
-                [
-                    "discord_guild_id",
-                    "discord_signup_channel_id",
-                    "discord_bracket_guild_id",
-                    "discord_bracket_channel_id",
-                ]
-            )
-        )
-    )
-    settings = {r.key: r.value for r in settings_result.scalars().all()}
+    """Resolve guild_id and channel_id for bracket posts. Prefer GuildConfig (per-guild), fallback to legacy SiteSettings."""
     guild_id = None
     channel_id = None
-    if settings.get("discord_bracket_channel_id") and settings.get("discord_bracket_guild_id"):
-        try:
-            guild_id = int(settings["discord_bracket_guild_id"])
-            channel_id = int(settings["discord_bracket_channel_id"])
-        except (ValueError, TypeError):
-            pass
-    if not (guild_id and channel_id) and settings.get("discord_guild_id") and settings.get("discord_signup_channel_id"):
-        try:
-            guild_id = int(settings["discord_guild_id"])
-            channel_id = int(settings["discord_signup_channel_id"])
-        except (ValueError, TypeError):
-            pass
-    if not guild_id and t and t.guild_id:
-        guild_id = t.guild_id
-        if settings.get("discord_signup_channel_id"):
+    # Prefer GuildConfig when tournament has a guild
+    if t and t.guild_id:
+        gc_result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == t.guild_id))
+        gc = gc_result.scalar_one_or_none()
+        if gc:
+            guild_id = t.guild_id
+            channel_id = gc.discord_bracket_channel_id or gc.discord_signup_channel_id
+    if not (guild_id and channel_id):
+        settings_result = await session.execute(
+            select(SiteSettings).where(
+                SiteSettings.key.in_(
+                    [
+                        "discord_guild_id",
+                        "discord_signup_channel_id",
+                        "discord_bracket_guild_id",
+                        "discord_bracket_channel_id",
+                    ]
+                )
+            )
+        )
+        settings = {r.key: r.value for r in settings_result.scalars().all()}
+        if settings.get("discord_bracket_channel_id") and settings.get("discord_bracket_guild_id"):
             try:
+                guild_id = int(settings["discord_bracket_guild_id"])
+                channel_id = int(settings["discord_bracket_channel_id"])
+            except (ValueError, TypeError):
+                pass
+        if not (guild_id and channel_id) and settings.get("discord_guild_id") and settings.get("discord_signup_channel_id"):
+            try:
+                guild_id = int(settings["discord_guild_id"])
                 channel_id = int(settings["discord_signup_channel_id"])
             except (ValueError, TypeError):
                 pass
+        if not guild_id and t and t.guild_id:
+            guild_id = t.guild_id
+            if settings.get("discord_signup_channel_id"):
+                try:
+                    channel_id = int(settings["discord_signup_channel_id"])
+                except (ValueError, TypeError):
+                    pass
     return guild_id, channel_id
 
 
@@ -1114,22 +1123,30 @@ async def post_signup_to_discord(
             raise HTTPException(404, "Tournament not found")
         if t.status != "open":
             raise HTTPException(400, f"Tournament is {t.status}. Set status to 'open' before posting signup.")
-        # Get guild_id and channel_id from body or site settings
+        # Get guild_id and channel_id from body, GuildConfig (per-guild), or legacy SiteSettings
         guild_id = body.guild_id if body and body.guild_id else None
         channel_id = body.channel_id if body and body.channel_id else None
         if not guild_id or not channel_id:
-            result = await session.execute(
-                select(SiteSettings).where(
-                    SiteSettings.key.in_(["discord_guild_id", "discord_signup_channel_id"])
+            # Prefer GuildConfig for tournament's guild
+            if t.guild_id and not guild_id:
+                gc_result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == t.guild_id))
+                gc = gc_result.scalar_one_or_none()
+                if gc and gc.discord_signup_channel_id:
+                    guild_id = t.guild_id
+                    channel_id = gc.discord_signup_channel_id
+            if not guild_id or not channel_id:
+                result = await session.execute(
+                    select(SiteSettings).where(
+                        SiteSettings.key.in_(["discord_guild_id", "discord_signup_channel_id"])
+                    )
                 )
-            )
-            settings = {row.key: row.value for row in result.scalars().all()}
-            try:
-                guild_id = guild_id or (int(settings["discord_guild_id"]) if settings.get("discord_guild_id") else None)
-                channel_id = channel_id or (int(settings["discord_signup_channel_id"]) if settings.get("discord_signup_channel_id") else None)
-            except (ValueError, TypeError):
-                guild_id = guild_id or None
-                channel_id = channel_id or None
+                settings = {row.key: row.value for row in result.scalars().all()}
+                try:
+                    guild_id = guild_id or (int(settings["discord_guild_id"]) if settings.get("discord_guild_id") else None)
+                    channel_id = channel_id or (int(settings["discord_signup_channel_id"]) if settings.get("discord_signup_channel_id") else None)
+                except (ValueError, TypeError):
+                    guild_id = guild_id or None
+                    channel_id = channel_id or None
         if not guild_id or not channel_id:
             raise HTTPException(
                 400,
