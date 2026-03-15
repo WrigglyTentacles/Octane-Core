@@ -58,6 +58,7 @@ _MIGRATIONS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_guild_moderator_user_guild ON guild_moderators(user_id, guild_id)",
     "CREATE TABLE IF NOT EXISTS registration_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, token VARCHAR(64) NOT NULL UNIQUE, discord_user_id INTEGER NOT NULL, guild_id INTEGER NOT NULL, expires_at DATETIME NOT NULL)",
     "CREATE INDEX IF NOT EXISTS ix_registration_tokens_token ON registration_tokens(token)",
+    "ALTER TABLE registration_tokens ADD COLUMN discord_role VARCHAR(16) DEFAULT 'moderator'",
     "ALTER TABLE web_users ADD COLUMN discord_id INTEGER",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_web_users_discord_id ON web_users(discord_id)",
 ]

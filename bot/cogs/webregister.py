@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 
 import config
-from bot.checks import mod_or_higher
+from bot.checks import mod_or_higher, _user_has_admin
 from sqlalchemy import select
 
 from bot.models import GuildConfig, RegistrationToken
@@ -38,6 +38,7 @@ async def webregister(interaction: discord.Interaction) -> None:
 
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    discord_role = "admin" if _user_has_admin(interaction) else "moderator"
 
     async for session in get_async_session():
         session.add(
@@ -46,6 +47,7 @@ async def webregister(interaction: discord.Interaction) -> None:
                 discord_user_id=user_id,
                 guild_id=guild_id,
                 expires_at=expires_at,
+                discord_role=discord_role,
             )
         )
         # Ensure GuildConfig exists for this guild

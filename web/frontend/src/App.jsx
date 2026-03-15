@@ -1896,7 +1896,7 @@ function App({ isCurrentPage = false }) {
 
   useEffect(() => {
     fetchTournaments();
-  }, []);
+  }, [apiBase]);
 
   useEffect(() => {
     fetchData();
@@ -1919,7 +1919,7 @@ function App({ isCurrentPage = false }) {
       fetchTournaments(showArchived);
     }, TOURNAMENTS_POLL_MS);
     return () => clearInterval(id);
-  }, [showArchived]);
+  }, [showArchived, apiBase]);
 
   // Restore last tab on initial load when landing at /
   const hasRestoredTab = useRef(false);

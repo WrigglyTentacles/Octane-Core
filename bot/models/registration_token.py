@@ -19,3 +19,4 @@ class RegistrationToken(Base):
     discord_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    discord_role: Mapped[str] = mapped_column(String(16), nullable=False, default="moderator")  # admin or moderator

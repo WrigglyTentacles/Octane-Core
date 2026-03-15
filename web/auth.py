@@ -114,9 +114,9 @@ async def claim_guild_moderator_with_credentials(
                 raise ValueError("Username already taken")
             user.username = username
             user.password_hash = hash_password(password)
-            # Ensure they have moderator role (they proved mod status via /webregister)
-            if user.role == "user":
-                user.role = "moderator"
+            # Upgrade role: user -> moderator/admin, moderator -> admin (when registering with admin token)
+            if user.role == "user" or (user.role == "moderator" and role == "admin"):
+                user.role = role
         else:
             # New user - username must be unique
             if other_user:
@@ -124,7 +124,7 @@ async def claim_guild_moderator_with_credentials(
             user = User(
                 username=username,
                 password_hash=hash_password(password),
-                role="moderator",  # Proven mod via /webregister; GuildModerator limits which guilds they see
+                role=role,  # admin or moderator from Discord (guild admin -> site admin)
                 discord_id=discord_id,
             )
             session.add(user)
@@ -167,17 +167,19 @@ async def get_current_user(
 
 
 async def promote_guild_moderator_if_needed(user: User) -> User:
-    """If user has role=user but GuildModerator exists, upgrade to moderator (for existing registrations)."""
+    """If user has role=user but GuildModerator exists, upgrade to moderator or admin (for existing registrations)."""
     if user.role != "user":
         return user
     async with async_session_factory() as session:
         result = await session.execute(
-            select(GuildModerator).where(GuildModerator.user_id == user.id).limit(1)
+            select(GuildModerator).where(GuildModerator.user_id == user.id)
         )
-        if result.scalar_one_or_none():
-            await session.execute(update(User).where(User.id == user.id).values(role="moderator"))
+        gms = result.scalars().all()
+        if gms:
+            role = "admin" if any(gm.role == "admin" for gm in gms) else "moderator"
+            await session.execute(update(User).where(User.id == user.id).values(role=role))
             await session.commit()
-            user.role = "moderator"
+            user.role = role
     return user
 
 

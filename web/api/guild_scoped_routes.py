@@ -194,12 +194,15 @@ async def register_with_credentials(
             await session.commit()
             raise HTTPException(400, "Token expired")
         discord_user_id = rt.discord_user_id
+        discord_role = (rt.discord_role or "moderator").lower()
+        if discord_role not in ("admin", "moderator"):
+            discord_role = "moderator"
         await session.delete(rt)
         await session.commit()
 
     try:
         user = await claim_guild_moderator_with_credentials(
-            discord_user_id, guild_id, body.username.strip(), body.password
+            discord_user_id, guild_id, body.username.strip(), body.password, role=discord_role
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

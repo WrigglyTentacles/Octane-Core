@@ -13,10 +13,11 @@ export function GuildSelector() {
   const currentGuildId = params.guildId ? String(params.guildId) : null;
   const isOnGuildRoute = /^\/s\/\d+/.test(location.pathname);
 
-  // Guild-scoped moderators: redirect from / to their only guild when they have exactly one
+  // Guild-scoped moderators: redirect from / to a guild so they only see that guild's tournaments
   useEffect(() => {
-    if (!user || !canEdit || loading || guilds.length !== 1 || user.role === 'admin') return;
+    if (!user || !canEdit || loading || user.role === 'admin') return;
     if (isOnGuildRoute) return;
+    if (guilds.length === 0) return;
     const g = guilds[0];
     if (g?.guild_id) navigate(`/s/${g.guild_id}${location.pathname === '/' ? '' : location.pathname}`, { replace: true });
   }, [user, canEdit, loading, guilds, isOnGuildRoute, navigate, location.pathname]);
