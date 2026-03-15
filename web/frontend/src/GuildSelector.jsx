@@ -24,8 +24,6 @@ export function GuildSelector() {
 
   if (!user || !canEdit || loading || guilds.length === 0) return null;
 
-  const isGlobalAdmin = user.is_global_admin === true || user.role === 'admin';
-
   // Build path for a guild: /s/{guildId} + current subpath (e.g. /current, /winners)
   const subpath = location.pathname.replace(/^\/s\/\d+/, '') || '';
   const guildPath = (guildId) => (guildId ? `/s/${guildId}${subpath}` : subpath || '/');
