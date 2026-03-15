@@ -1943,7 +1943,7 @@ function App({ isCurrentPage = false }) {
     } catch {}
   }, [tournaments, tournamentId, location.pathname, navigate]);
 
-  // Sync activeTab with URL path so /teams, /bracket, etc. work
+  // Sync activeTab with URL path so /teams, /bracket, /s/:guildId/bracket, etc. work
   useEffect(() => {
     const path = location.pathname;
     if (path === '/participants' || path === '/standby') {
@@ -1953,17 +1953,23 @@ function App({ isCurrentPage = false }) {
     let tabFromPath;
     if (path.startsWith('/current')) {
       tabFromPath = (path === '/current' || path === '/current/') ? 'players' : (path.split('/').pop() || 'players');
+    } else if (path.match(/^\/s\/[^/]+\//)) {
+      // /s/123/teams or /s/octane-community/bracket
+      tabFromPath = path.split('/').pop() || 'players';
+    } else if (path.match(/^\/s\/[^/]+$/)) {
+      tabFromPath = 'players';
     } else {
       tabFromPath = path === '/' ? 'players' : path.slice(1);
     }
     const validTabs = ['players', 'teams', 'bracket'];
     const onCurrentPage = path.startsWith('/current');
+    const basePath = guildId ? `/s/${guildId}` : '/';
     if (validTabs.includes(tabFromPath)) {
       const fmt = tournaments.find((t) => t.id === tournamentId)?.format;
       const isTeamFormat = fmt && fmt !== '1v1';
       const knowFormat = tournaments.length && tournamentId && fmt;
       if (tabFromPath === 'teams' && knowFormat && !isTeamFormat) {
-        navigate(onCurrentPage ? '/current' : '/', { replace: true });
+        navigate(onCurrentPage ? (guildId ? `/s/${guildId}/current` : '/current') : basePath, { replace: true });
       } else {
         setActiveTab(tabFromPath);
         try {
@@ -1971,7 +1977,7 @@ function App({ isCurrentPage = false }) {
         } catch {}
       }
     }
-  }, [location.pathname, tournamentId, tournaments, navigate]);
+  }, [location.pathname, tournamentId, tournaments, navigate, guildId]);
 
   const fetchPreview = async () => {
     if (!tournamentId) return;
@@ -2875,7 +2881,9 @@ function App({ isCurrentPage = false }) {
             return (
               <div style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
                 {tabs.map((tab) => {
-                  const path = tab === 'players' ? '/' : `/${tab}`;
+                  const path = guildId
+                    ? (tab === 'players' ? `/s/${guildId}` : `/s/${guildId}/${tab}`)
+                    : (tab === 'players' ? '/' : `/${tab}`);
                   return (
                     <Link
                       key={tab}

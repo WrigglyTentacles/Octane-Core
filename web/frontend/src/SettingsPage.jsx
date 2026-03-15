@@ -74,7 +74,12 @@ export default function SettingsPage() {
           discord_bracket_channel_id: dData.discord_bracket_channel_id || '',
           discord_bracket_channel_name: dData.discord_bracket_channel_name || '',
         });
-        setBracketGuildId(effectiveGuildId || dData.discord_bracket_guild_id || '');
+        // Use backend-resolved numeric guild ID for channel fetch (URL param may be a slug)
+        setBracketGuildId(
+          effectiveGuildId
+            ? (dData.discord_bracket_guild_id || dData.discord_guild_id || effectiveGuildId)
+            : (dData.discord_bracket_guild_id || '')
+        );
         setBracketChannelId(dData.discord_bracket_channel_id || '');
       } catch (err) {
         setError(err.message);

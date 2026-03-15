@@ -28,6 +28,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/s/:guildId/settings" element={<SettingsPage />} />
             <Route path="/s/:guildId/register" element={<RegisterPage />} />
             <Route path="/s/:guildId" element={<App />} />
+            <Route path="/s/:guildId/teams" element={<App />} />
+            <Route path="/s/:guildId/bracket" element={<App />} />
             <Route path="/s/:guildId/current/*" element={<App isCurrentPage />} />
             <Route path="/s/:guildId/winners" element={<WinnersPage />} />
           </Routes>
