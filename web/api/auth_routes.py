@@ -153,6 +153,8 @@ async def get_my_guilds(user: User = Depends(require_user)):
                     # User no longer has mod role - remove GuildModerator
                     await session.execute(delete(GuildModerator).where(GuildModerator.id == gm.id))
                     continue
+                # Sync role from Discord: admin roles → admin, moderator/Tournament Commissioner → moderator
+                gm.role = "admin" if data.get("has_admin") else "moderator"
             except Exception:
                 continue
             gc_result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == gm.guild_id))

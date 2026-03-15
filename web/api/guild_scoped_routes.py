@@ -87,6 +87,7 @@ async def list_tournaments(
                 "status": t.status,
                 "archived": t.archived,
                 "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+                "guild_id": str(t.guild_id),
             }
             for t in tournaments
         ]
@@ -121,6 +122,7 @@ async def get_current_tournament(
                 "status": t.status,
                 "archived": t.archived,
                 "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+                "guild_id": str(t.guild_id),
             }
             for t in tournaments
         ]

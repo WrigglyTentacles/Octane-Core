@@ -217,6 +217,27 @@ async def user_has_mod_in_guild(guild, discord_user_id: int, *, client=None) -> 
     return mod_by_id or mod_by_name
 
 
+async def user_has_admin_in_guild(guild, discord_user_id: int, *, client=None) -> bool:
+    """Check if a Discord user has admin role in a guild. Used for GuildModerator.role sync."""
+    if not guild:
+        return False
+    if guild.owner_id == discord_user_id:
+        return True
+    try:
+        member = await guild.fetch_member(discord_user_id)
+    except (discord.NotFound, discord.HTTPException):
+        return False
+    if member.guild_permissions.administrator:
+        return True
+    if discord_user_id in config.ADMIN_USER_IDS:
+        return True
+    role_ids = _get_role_ids(member)
+    role_names = _get_role_names(member)
+    if not role_names and role_ids and client:
+        role_names = await _resolve_role_names(role_ids, guild, client)
+    return bool(role_ids & config.ADMIN_ROLE_IDS) or bool(role_names & config.ADMIN_ROLE_NAMES)
+
+
 def admin_only():
     """Check that user has Admin role or is server admin."""
 

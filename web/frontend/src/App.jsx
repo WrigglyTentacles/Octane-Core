@@ -1865,12 +1865,20 @@ function App({ isCurrentPage = false }) {
   };
 
   useEffect(() => {
-    if (!menuOpen) return;
-    const discordUrl = guildId ? `${API}/settings/discord` : `${API_GLOBAL}/settings/discord`;
+    if (!tournamentId) return;
+    const t = tournaments.find((x) => x.id === tournamentId);
+    // Use tournament's guild_id (per-guild signup channel). guild_id=0 uses global.
+    // Prefer guildId from URL when in guild view - preserves precision for Discord snowflakes (>2^53).
+    const tGuildId = t?.guild_id;
+    const tGuildIdStr = tGuildId != null && tGuildId !== 0 && tGuildId !== '0' ? String(tGuildId) : null;
+    const guildForDiscord = guildId && guildId !== '0'
+      ? guildId
+      : (tGuildIdStr || null);
+    const discordUrl = guildForDiscord ? `/api/s/${guildForDiscord}/settings/discord` : `${API_GLOBAL}/settings/discord`;
     fetch(discordUrl).then((r) => r.ok ? r.json() : {}).then((d) => {
       setDiscordConfigReady(!!(d?.enabled && d?.discord_guild_id && d?.discord_signup_channel_id));
     }).catch(() => setDiscordConfigReady(false));
-  }, [menuOpen, guildId, API]);
+  }, [tournamentId, tournaments, guildId, API_GLOBAL]);
 
   useEffect(() => {
     const url = guildId ? `${API}/settings` : `${API_GLOBAL}/settings`;
@@ -2529,6 +2537,27 @@ function App({ isCurrentPage = false }) {
                   <span style={{ fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 20, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.color}40` }}>
                     {cfg.label}
                   </span>
+                  {canEdit && t.status === 'open' && (
+                    <button
+                      className="btn-accent"
+                      disabled={!discordConfigReady}
+                      style={{ marginLeft: 12, opacity: discordConfigReady ? 1 : 0.6 }}
+                      onClick={async () => {
+                        if (!discordConfigReady) return;
+                        try {
+                          const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/post-signup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+                          const data = await res.json();
+                          if (!res.ok) throw new Error(data?.detail || 'Failed to post');
+                          setError('');
+                        } catch (err) {
+                          setError(err.message);
+                        }
+                      }}
+                      title={discordConfigReady ? 'Post signup message to Discord' : 'Run /tournament set-signup-channel in your Discord server first'}
+                    >
+                      Post signup to Discord
+                    </button>
+                  )}
                 </>
               );
             })()}
@@ -2607,9 +2636,11 @@ function App({ isCurrentPage = false }) {
                           <button onClick={async () => { setMenuSection('deadline'); const list = await fetchTournaments(); const d = list?.find((t) => t.id === tournamentId)?.registration_deadline; setDeadlineValue(d ? utcToDatetimeLocal(d) : ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Registration signup deadline">
                             Set deadline
                           </button>
-                          {discordConfigReady && tournaments.find((t) => t.id === tournamentId)?.status === 'open' && (
+                          {tournaments.find((t) => t.id === tournamentId)?.status === 'open' && (
                             <button
+                              disabled={!discordConfigReady}
                               onClick={async () => {
+                                if (!discordConfigReady) return;
                                 try {
                                   const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/post-signup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
                                   const data = await res.json();
@@ -2620,8 +2651,8 @@ function App({ isCurrentPage = false }) {
                                   setError(err.message);
                                 }
                               }}
-                              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}
-                              title="Post signup message to Discord"
+                              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4, opacity: discordConfigReady ? 1 : 0.6 }}
+                              title={discordConfigReady ? 'Post signup message to Discord' : 'Run /tournament set-signup-channel in your Discord server first'}
                             >
                               Post signup to Discord
                             </button>

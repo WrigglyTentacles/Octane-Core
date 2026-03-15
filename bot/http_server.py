@@ -438,9 +438,10 @@ async def _handle_has_mod(request: aiohttp.web.Request) -> aiohttp.web.Response:
     guild = bot.get_guild(guild_id)
     if not guild:
         return aiohttp.web.json_response({"error": "Guild not found"}, status=404)
-    from bot.checks import user_has_mod_in_guild
+    from bot.checks import user_has_admin_in_guild, user_has_mod_in_guild
     has_mod = await user_has_mod_in_guild(guild, user_id, client=bot)
-    return aiohttp.web.json_response({"has_mod": has_mod})
+    has_admin = await user_has_admin_in_guild(guild, user_id, client=bot)
+    return aiohttp.web.json_response({"has_mod": has_mod, "has_admin": has_admin})
 
 
 async def _handle_get_channels(request: aiohttp.web.Request) -> aiohttp.web.Response:
