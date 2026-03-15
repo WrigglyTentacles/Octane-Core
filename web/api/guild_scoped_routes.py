@@ -135,7 +135,7 @@ async def get_current_tournament(
 @router.get("/winners")
 async def list_winners(guild_id: int = Depends(resolve_guild)):
     """List tournament champions for this guild."""
-    from web.api.routes import _fetch_winners_with_ids
+    from web.api.routes import _fetch_winners_for_tournaments
 
     async with async_session_factory() as session:
         result = await session.execute(
@@ -152,10 +152,7 @@ async def list_winners(guild_id: int = Depends(resolve_guild)):
             .limit(100)
         )
         tournaments = result.scalars().all()
-        tournament_ids = {t.id for t in tournaments}
-        winners_raw = await _fetch_winners_with_ids(session)
-        winners = [w for w in winners_raw if w["tournament_id"] in tournament_ids]
-        return winners
+        return await _fetch_winners_for_tournaments(session, tournaments)
 
 
 # --- Registration (magic link + username/password) ---

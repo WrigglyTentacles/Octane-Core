@@ -823,25 +823,10 @@ async def create_tournament(body: TournamentCreate):
         return {"id": t.id, "name": t.name, "format": t.format, "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None}
 
 
-@router.get("/winners")
-async def list_winners(user: User = Depends(require_user)):
-    """List all-time tournament champions (global view; requires auth). Guild-scoped /api/s/{guild_id}/winners is public."""
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(Tournament)
-            .where(
-                or_(
-                    Tournament.status == "completed",
-                    Tournament.status == "closed",
-                    Tournament.archived == True,  # noqa: E712
-                )
-            )
-            .order_by(Tournament.id.desc())
-            .limit(100)
-        )
-        tournaments = result.scalars().all()
-        winners = []
-        for t in tournaments:
+async def _fetch_winners_for_tournaments(session: AsyncSession, tournaments: list) -> list:
+    """Build winners list (full display format) for the given tournaments."""
+    winners = []
+    for t in tournaments:
             bracket_result = await session.execute(
                 select(Bracket)
                 .where(Bracket.tournament_id == t.id)
@@ -991,7 +976,27 @@ async def list_winners(user: User = Depends(require_user)):
                 if finalist_display_name is not None:
                     row["finalist_display_name"] = finalist_display_name
                 winners.append(row)
-        return winners
+    return winners
+
+
+@router.get("/winners")
+async def list_winners(user: User = Depends(require_user)):
+    """List all-time tournament champions (global view; requires auth). Guild-scoped /api/s/{guild_id}/winners is public."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Tournament)
+            .where(
+                or_(
+                    Tournament.status == "completed",
+                    Tournament.status == "closed",
+                    Tournament.archived == True,  # noqa: E712
+                )
+            )
+            .order_by(Tournament.id.desc())
+            .limit(100)
+        )
+        tournaments = result.scalars().all()
+        return await _fetch_winners_for_tournaments(session, tournaments)
 
 
 @router.get("/tournaments/current")
