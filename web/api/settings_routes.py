@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from bot.models import SiteSettings
 from bot.models.base import async_session_factory
-from web.auth import require_global_admin_user, require_moderator_user
+from web.auth import require_global_admin_user, require_moderator_user, require_moderator_for_guild
 
 router = APIRouter(prefix="/settings", tags=["settings"])  # Mounted at /api in main
 
@@ -169,7 +169,7 @@ async def get_discord_guilds(user=Depends(require_moderator_user)):
 
 @router.get("/discord/guilds/{guild_id}/channels")
 async def get_discord_channels(
-    guild_id: str, user=Depends(require_moderator_user)
+    guild_id: int, user=Depends(require_moderator_for_guild)
 ):
     """List text channels in a guild (for channel picker). Proxies to bot."""
     if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:

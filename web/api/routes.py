@@ -13,7 +13,7 @@ import config
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from bot.models import User
-from web.auth import require_moderator_user, require_user, require_user_or_guild_tournament
+from web.auth import check_moderator_for_guild, require_moderator_user, require_moderator_for_tournament, require_moderator_for_guild, require_user, require_user_or_guild_tournament
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -39,7 +39,7 @@ router = APIRouter(prefix="", tags=["tournaments"])  # Mounted at /api in main
 
 
 @router.get("/discord/guilds/{guild_id}/channels")
-async def get_discord_channels(guild_id: str, user: User = Depends(require_moderator_user)):
+async def get_discord_channels(guild_id: int, user: User = Depends(require_moderator_for_guild)):
     """List text channels in a guild (for channel picker). Proxies to bot."""
     if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
         raise HTTPException(503, "Discord integration not configured")
@@ -312,7 +312,7 @@ async def list_participants(
 
 
 @router.post("/tournaments/{tournament_id}/participants")
-async def add_participant(tournament_id: int, body: ManualEntryCreate, user: User = Depends(require_moderator_user)):
+async def add_participant(tournament_id: int, body: ManualEntryCreate, user: User = Depends(require_moderator_for_tournament)):
     """Add a manual participant."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
@@ -341,7 +341,7 @@ async def add_participant(tournament_id: int, body: ManualEntryCreate, user: Use
 
 
 @router.patch("/tournaments/{tournament_id}/participants/{entry_id}")
-async def rename_participant(tournament_id: int, entry_id: int, body: ManualEntryCreate, user: User = Depends(require_moderator_user)):
+async def rename_participant(tournament_id: int, entry_id: int, body: ManualEntryCreate, user: User = Depends(require_moderator_for_tournament)):
     """Rename a manual participant."""
     async with async_session_factory() as session:
         entry = await session.get(TournamentManualEntry, entry_id)
@@ -354,7 +354,7 @@ async def rename_participant(tournament_id: int, entry_id: int, body: ManualEntr
 
 
 @router.delete("/tournaments/{tournament_id}/participants/{entry_id}")
-async def remove_participant(tournament_id: int, entry_id: int, user: User = Depends(require_moderator_user)):
+async def remove_participant(tournament_id: int, entry_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Remove a manual participant."""
     async with async_session_factory() as session:
         entry = await session.get(TournamentManualEntry, entry_id)
@@ -366,7 +366,7 @@ async def remove_participant(tournament_id: int, entry_id: int, user: User = Dep
 
 
 @router.patch("/tournaments/{tournament_id}/participants/reorder")
-async def reorder_participants(tournament_id: int, body: ManualEntryReorder, user: User = Depends(require_moderator_user)):
+async def reorder_participants(tournament_id: int, body: ManualEntryReorder, user: User = Depends(require_moderator_for_tournament)):
     """Reorder participants by ID list (manual entries only)."""
     async with async_session_factory() as session:
         for i, eid in enumerate(body.entry_ids):
@@ -380,7 +380,7 @@ async def reorder_participants(tournament_id: int, body: ManualEntryReorder, use
 
 
 @router.delete("/tournaments/{tournament_id}/registrations/{player_id}")
-async def remove_registration(tournament_id: int, player_id: int, user: User = Depends(require_moderator_user)):
+async def remove_registration(tournament_id: int, player_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Remove a Discord registration. If on a team, unassigns to participants; otherwise fully removes."""
     async with async_session_factory() as session:
         result = await session.execute(
@@ -440,7 +440,7 @@ async def list_standby(
 
 
 @router.post("/tournaments/{tournament_id}/standby")
-async def add_standby(tournament_id: int, body: ManualEntryCreate, user: User = Depends(require_moderator_user)):
+async def add_standby(tournament_id: int, body: ManualEntryCreate, user: User = Depends(require_moderator_for_tournament)):
     """Add a standby entry."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
@@ -469,7 +469,7 @@ async def add_standby(tournament_id: int, body: ManualEntryCreate, user: User = 
 
 
 @router.patch("/tournaments/{tournament_id}/standby/{entry_id}")
-async def rename_standby(tournament_id: int, entry_id: int, body: ManualEntryCreate, user: User = Depends(require_moderator_user)):
+async def rename_standby(tournament_id: int, entry_id: int, body: ManualEntryCreate, user: User = Depends(require_moderator_for_tournament)):
     """Rename a standby entry (including those substituted in)."""
     async with async_session_factory() as session:
         entry = await session.get(TournamentManualEntry, entry_id)
@@ -488,7 +488,7 @@ async def rename_standby(tournament_id: int, entry_id: int, body: ManualEntryCre
 
 
 @router.delete("/tournaments/{tournament_id}/standby/{entry_id}")
-async def remove_standby(tournament_id: int, entry_id: int, user: User = Depends(require_moderator_user)):
+async def remove_standby(tournament_id: int, entry_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Remove a standby entry."""
     async with async_session_factory() as session:
         entry = await session.get(TournamentManualEntry, entry_id)
@@ -501,7 +501,7 @@ async def remove_standby(tournament_id: int, entry_id: int, user: User = Depends
 
 @router.patch("/tournaments/{tournament_id}/manual-entries/{entry_id}/move")
 async def move_manual_entry(
-    tournament_id: int, entry_id: int, body: ManualEntryMove, user: User = Depends(require_moderator_user)
+    tournament_id: int, entry_id: int, body: ManualEntryMove, user: User = Depends(require_moderator_for_tournament)
 ):
     """Move a manual entry between participants and standby."""
     if body.list_type not in ("participant", "standby"):
@@ -532,7 +532,7 @@ async def move_manual_entry(
 
 
 @router.patch("/tournaments/{tournament_id}/standby/reorder")
-async def reorder_standby(tournament_id: int, body: ManualEntryReorder, user: User = Depends(require_moderator_user)):
+async def reorder_standby(tournament_id: int, body: ManualEntryReorder, user: User = Depends(require_moderator_for_tournament)):
     """Reorder standby entries."""
     async with async_session_factory() as session:
         for i, eid in enumerate(body.entry_ids):
@@ -547,7 +547,7 @@ async def reorder_standby(tournament_id: int, body: ManualEntryReorder, user: Us
 
 
 @router.put("/tournaments/{tournament_id}/teams")
-async def update_teams(tournament_id: int, body: TeamsBulkUpdate, user: User = Depends(require_moderator_user)):
+async def update_teams(tournament_id: int, body: TeamsBulkUpdate, user: User = Depends(require_moderator_for_tournament)):
     """Replace all teams with the given structure. Removes existing bracket. Use for drag-drop editing."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
@@ -678,7 +678,7 @@ async def substitute_standby(tournament_id: int, body: SubstituteRequest):
 
 
 @router.post("/tournaments/{tournament_id}/teams/regenerate")
-async def regenerate_teams(tournament_id: int, user: User = Depends(require_moderator_user)):
+async def regenerate_teams(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Regenerate teams from participants + standby (manual and Discord). Deletes existing bracket; generate bracket separately when ready."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
@@ -773,6 +773,7 @@ class TournamentCreate(BaseModel):
     format: str = "1v1"  # 1v1, 2v2, 3v3, 4v4, custom
     guild_id: Optional[int] = None  # Optional; 0 for web-only. Accept str from frontend (avoids JS number precision loss).
     registration_deadline: Optional[str] = None  # ISO datetime, e.g. 2026-02-24T18:00:00
+    starts_at: Optional[str] = None  # ISO datetime; when tournament begins. Defaults to registration_deadline if omitted.
 
     @field_validator("guild_id", mode="before")
     @classmethod
@@ -804,10 +805,25 @@ def _parse_deadline(s: Optional[str]):
         return None
 
 
+def _apply_time_defaults(reg_deadline, starts_at):
+    """If only one of registration_deadline/starts_at is set, use it for both."""
+    if reg_deadline and starts_at:
+        return reg_deadline, starts_at
+    if reg_deadline:
+        return reg_deadline, reg_deadline
+    if starts_at:
+        return starts_at, starts_at
+    return None, None
+
+
 @router.post("/tournaments")
-async def create_tournament(body: TournamentCreate):
-    """Create a tournament (for web UI; guild_id=0 for non-Discord use)."""
+async def create_tournament(body: TournamentCreate, user: User = Depends(require_moderator_user)):
+    """Create a tournament (for web UI; guild_id=0 for non-Discord use). Requires moderator of guild when guild_id set."""
+    if body.guild_id and body.guild_id != 0:
+        await check_moderator_for_guild(body.guild_id, user)
     reg_deadline = _parse_deadline(body.registration_deadline)
+    starts_at = _parse_deadline(body.starts_at)
+    reg_deadline, starts_at = _apply_time_defaults(reg_deadline, starts_at)
     async with async_session_factory() as session:
         t = Tournament(
             guild_id=body.guild_id or 0,
@@ -816,11 +832,18 @@ async def create_tournament(body: TournamentCreate):
             mmr_playlist=_mmr_for_format(body.format),
             status="open",
             registration_deadline=reg_deadline,
+            starts_at=starts_at,
         )
         session.add(t)
         await session.commit()
         await session.refresh(t)
-        return {"id": t.id, "name": t.name, "format": t.format, "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None}
+        return {
+            "id": t.id,
+            "name": t.name,
+            "format": t.format,
+            "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+            "starts_at": t.starts_at.isoformat() if t.starts_at else None,
+        }
 
 
 async def _fetch_winners_for_tournaments(session: AsyncSession, tournaments: list) -> list:
@@ -1022,6 +1045,7 @@ async def get_current_tournament(tournament_id: Optional[int] = None, user: User
                 "status": t.status,
                 "archived": t.archived,
                 "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+                "starts_at": t.starts_at.isoformat() if t.starts_at else None,
                 "guild_id": str(t.guild_id),
             }
             for t in tournaments
@@ -1048,6 +1072,7 @@ async def list_tournaments(include_archived: bool = False, user: User = Depends(
                 "status": t.status,
                 "archived": t.archived,
                 "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+                "starts_at": t.starts_at.isoformat() if t.starts_at else None,
                 "guild_id": str(t.guild_id),
             }
             for t in tournaments
@@ -1060,10 +1085,11 @@ class TournamentUpdate(BaseModel):
     status: Optional[str] = None
     archived: Optional[bool] = None
     registration_deadline: Optional[str] = None  # ISO datetime; empty string to clear
+    starts_at: Optional[str] = None  # ISO datetime; empty string to clear. Defaults to registration_deadline if only one provided.
 
 
 @router.patch("/tournaments/{tournament_id}")
-async def update_tournament(tournament_id: int, body: TournamentUpdate, user: User = Depends(require_moderator_user)):
+async def update_tournament(tournament_id: int, body: TournamentUpdate, user: User = Depends(require_moderator_for_tournament)):
     """Rename or update a tournament. Format change clears teams/bracket when switching to 1v1."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
@@ -1092,8 +1118,12 @@ async def update_tournament(tournament_id: int, body: TournamentUpdate, user: Us
             t.status = body.status
         if body.archived is not None:
             t.archived = body.archived
-        if body.registration_deadline is not None:
-            t.registration_deadline = _parse_deadline(body.registration_deadline)
+        if body.registration_deadline is not None or body.starts_at is not None:
+            reg_deadline = _parse_deadline(body.registration_deadline) if body.registration_deadline is not None else t.registration_deadline
+            starts_at = _parse_deadline(body.starts_at) if body.starts_at is not None else t.starts_at
+            reg_deadline, starts_at = _apply_time_defaults(reg_deadline, starts_at)
+            t.registration_deadline = reg_deadline
+            t.starts_at = starts_at
         await session.commit()
         await session.refresh(t)
         return {
@@ -1102,6 +1132,7 @@ async def update_tournament(tournament_id: int, body: TournamentUpdate, user: Us
             "format": t.format,
             "status": t.status,
             "registration_deadline": t.registration_deadline.isoformat() if t.registration_deadline else None,
+            "starts_at": t.starts_at.isoformat() if t.starts_at else None,
         }
 
 
@@ -1114,7 +1145,7 @@ class CloneTournamentRequest(BaseModel):
 async def clone_tournament(
     tournament_id: int,
     body: Optional[CloneTournamentRequest] = None,
-    user: User = Depends(require_moderator_user),
+    user: User = Depends(require_moderator_for_tournament),
 ):
     """Clone a tournament with its participants and standby. Optionally set new name/format."""
     async with async_session_factory() as session:
@@ -1131,6 +1162,8 @@ async def clone_tournament(
             mmr_playlist=_mmr_for_format(fmt),
             status="open",
             archived=False,
+            registration_deadline=src.registration_deadline,
+            starts_at=src.starts_at,
         )
         session.add(t)
         await session.flush()
@@ -1164,7 +1197,7 @@ class PostSignupRequest(BaseModel):
 async def post_signup_to_discord(
     tournament_id: int,
     body: Optional[PostSignupRequest] = None,
-    user: User = Depends(require_moderator_user),
+    user: User = Depends(require_moderator_for_tournament),
 ):
     """Trigger the bot to post the signup message to Discord. Requires Discord settings configured in Settings."""
     if not config.INTERNAL_API_SECRET:
@@ -1229,7 +1262,7 @@ async def post_signup_to_discord(
 
 
 @router.delete("/tournaments/{tournament_id}")
-async def delete_tournament(tournament_id: int, user: User = Depends(require_moderator_user)):
+async def delete_tournament(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Delete a tournament and all its data."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
@@ -1245,7 +1278,7 @@ async def delete_tournament(tournament_id: int, user: User = Depends(require_mod
 
 
 @router.post("/tournaments/{tournament_id}/bracket/generate")
-async def generate_bracket(tournament_id: int, body: Optional[GenerateBracketRequest] = None, user: User = Depends(require_moderator_user)):
+async def generate_bracket(tournament_id: int, body: Optional[GenerateBracketRequest] = None, user: User = Depends(require_moderator_for_tournament)):
     """Generate bracket from manual participants (and optionally Discord registrations)."""
     from bot.services.bracket_gen import create_manual_bracket
 
@@ -1272,7 +1305,7 @@ async def generate_bracket(tournament_id: int, body: Optional[GenerateBracketReq
 
 
 @router.delete("/tournaments/{tournament_id}/bracket")
-async def delete_bracket(tournament_id: int, user: User = Depends(require_moderator_user)):
+async def delete_bracket(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Delete the bracket. Bracket must be regenerated manually via Generate Bracket."""
     async with async_session_factory() as session:
         t = await session.get(Tournament, tournament_id)
@@ -1289,7 +1322,7 @@ async def delete_bracket(tournament_id: int, user: User = Depends(require_modera
 
 
 @router.post("/tournaments/{tournament_id}/bracket/regenerate")
-async def regenerate_bracket(tournament_id: int, body: Optional[GenerateBracketRequest] = None, user: User = Depends(require_moderator_user)):
+async def regenerate_bracket(tournament_id: int, body: Optional[GenerateBracketRequest] = None, user: User = Depends(require_moderator_for_tournament)):
     """Delete existing bracket and generate a new one from current participants/teams."""
     from bot.services.bracket_gen import create_manual_bracket
 
@@ -1318,7 +1351,7 @@ async def regenerate_bracket(tournament_id: int, body: Optional[GenerateBracketR
 
 
 @router.post("/tournaments/{tournament_id}/bracket/post-teams")
-async def post_teams_to_discord(tournament_id: int, user: User = Depends(require_moderator_user)):
+async def post_teams_to_discord(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Manually post teams/participants embed to Discord bracket channel."""
     if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
         raise HTTPException(503, "Discord integration not configured")
@@ -1345,7 +1378,7 @@ async def post_teams_to_discord(tournament_id: int, user: User = Depends(require
 
 
 @router.post("/tournaments/{tournament_id}/bracket/post-round")
-async def post_round_to_discord(tournament_id: int, user: User = Depends(require_moderator_user)):
+async def post_round_to_discord(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Manually post current round lineup embed to Discord bracket channel."""
     if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
         raise HTTPException(503, "Discord integration not configured")
@@ -1371,8 +1404,37 @@ async def post_round_to_discord(tournament_id: int, user: User = Depends(require
         return {"ok": True, "message_id": r.json().get("message_id")}
 
 
+@router.post("/tournaments/{tournament_id}/bracket/post-tournament-begins")
+async def post_tournament_begins_to_discord(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
+    """Post standalone tournament begins message to Discord bracket channel (requires starts_at set)."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        raise HTTPException(503, "Discord integration not configured")
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            raise HTTPException(404, "Tournament not found")
+        if not t.starts_at:
+            raise HTTPException(400, "Tournament has no start time. Set it in Set times first.")
+        guild_id, channel_id = await _get_discord_bracket_channel(session, t)
+        if not (guild_id and channel_id):
+            raise HTTPException(400, "Discord bracket channel not configured. Set it in Settings.")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-tournament-begins",
+                    json={"tournament_id": tournament_id, "channel_id": channel_id, "guild_id": guild_id},
+                    headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+                )
+        except Exception as e:
+            raise HTTPException(503, f"Could not reach bot: {e}") from e
+        if r.status_code != 200:
+            err = r.json().get("error", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+            raise HTTPException(400, err)
+        return {"ok": True, "message_id": r.json().get("message_id")}
+
+
 @router.post("/tournaments/{tournament_id}/bracket/post-results")
-async def post_results_to_discord(tournament_id: int, user: User = Depends(require_moderator_user)):
+async def post_results_to_discord(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Manually post tournament results embed to Discord bracket channel (requires champion)."""
     if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
         raise HTTPException(503, "Discord integration not configured")
@@ -1398,6 +1460,30 @@ async def post_results_to_discord(tournament_id: int, user: User = Depends(requi
         return {"ok": True, "message_id": r.json().get("message_id")}
 
 
+@router.post("/tournaments/{tournament_id}/bracket/cleanup-messages")
+async def cleanup_messages_to_discord(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
+    """Delete all tracked Discord messages for a tournament (signup, teams, round, results)."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        raise HTTPException(503, "Discord integration not configured")
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            raise HTTPException(404, "Tournament not found")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/cleanup-messages",
+                    json={"tournament_id": tournament_id},
+                    headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+                )
+        except Exception as e:
+            raise HTTPException(503, f"Could not reach bot: {e}") from e
+        if r.status_code != 200:
+            err = r.json().get("error", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+            raise HTTPException(400, err)
+        return {"ok": True, "deleted": r.json().get("deleted", 0)}
+
+
 # --- Bracket match updates (for drag-drop) ---
 
 
@@ -1410,7 +1496,7 @@ class SwapSlotsRequest(BaseModel):
 
 @router.post("/tournaments/{tournament_id}/bracket/matches/swap-slots")
 async def swap_slots_route(
-    tournament_id: int, body: SwapSlotsRequest, user: User = Depends(require_moderator_user)
+    tournament_id: int, body: SwapSlotsRequest, user: User = Depends(require_moderator_for_tournament)
 ):
     """Swap or move entities between two bracket slots. Clears winners for affected matches."""
     from bot.services.bracket_gen import swap_slots
@@ -1433,7 +1519,7 @@ async def swap_slots_route(
 
 @router.post("/tournaments/{tournament_id}/bracket/matches/{match_id}/clear-winner")
 async def clear_match_winner_route(
-    tournament_id: int, match_id: int, user: User = Depends(require_moderator_user)
+    tournament_id: int, match_id: int, user: User = Depends(require_moderator_for_tournament)
 ):
     """Clear the winner of a match. Use when a result was set incorrectly and you need to undo."""
     from bot.services.bracket_gen import clear_match_winner
@@ -1449,7 +1535,7 @@ async def clear_match_winner_route(
 
 @router.post("/tournaments/{tournament_id}/bracket/matches/{match_id}/swap-winner")
 async def swap_match_winner_route(
-    tournament_id: int, match_id: int, user: User = Depends(require_moderator_user)
+    tournament_id: int, match_id: int, user: User = Depends(require_moderator_for_tournament)
 ):
     """Swap the winner of a match to the other team. Use when a result was reported incorrectly."""
     from bot.services.bracket_gen import swap_match_winner
@@ -1497,7 +1583,7 @@ async def update_match(
     tournament_id: int,
     match_id: int,
     body: BracketMatchUpdate,
-    user: User = Depends(require_moderator_user),
+    user: User = Depends(require_moderator_for_tournament),
 ):
     """Update a bracket match (assign teams/players, set winner). Single elim: advance when round complete (randomize bye, exclude teams that had bye). Double elim: advance immediately. Auto-sets tournament to completed when champion is declared."""
     from bot.services.bracket_gen import (

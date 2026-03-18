@@ -7,6 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import delete, select
+from sqlalchemy.orm import selectinload
 
 import config
 from bot.models import GuildConfig, GuildModerator, User
@@ -44,6 +45,19 @@ class UserResponse(BaseModel):
     is_global_admin: bool = False
 
 
+class UserGuildMembership(BaseModel):
+    guild_id: str
+    guild_name: str
+    role: str  # moderator, admin
+
+
+class UserWithGuildsResponse(BaseModel):
+    username: str
+    role: str
+    is_global_admin: bool = False
+    guilds: list[UserGuildMembership] = []
+
+
 class CreateUserRequest(BaseModel):
     username: str
     password: str
@@ -79,20 +93,52 @@ async def login(body: LoginRequest):
     return LoginResponse(access_token=token, username=user.username, role=user.role)
 
 
-@router.get("/me", response_model=UserResponse)
+def _guild_role(gm, gc) -> dict:
+    return {"guild_id": str(gm.guild_id), "guild_name": gc.name if gc else str(gm.guild_id), "role": gm.role}
+
+
+@router.get("/me")
 async def get_me(user: User = Depends(require_user)):
-    """Get current authenticated user."""
+    """Get current authenticated user with guild roles (for permission checks)."""
     user = await promote_guild_moderator_if_needed(user)
-    return UserResponse(username=user.username, role=user.role, is_global_admin=is_global_admin(user))
+    guild_roles = []
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(GuildModerator, GuildConfig)
+            .outerjoin(GuildConfig, GuildConfig.guild_id == GuildModerator.guild_id)
+            .where(GuildModerator.user_id == user.id)
+        )
+        for gm, gc in result.all():
+            guild_roles.append(_guild_role(gm, gc))
+    return {
+        "username": user.username,
+        "role": user.role,
+        "is_global_admin": is_global_admin(user),
+        "guild_roles": guild_roles,
+    }
 
 
 @router.get("/me/optional")
 async def get_me_optional(user: Optional[User] = Depends(get_current_user)):
-    """Get current user if logged in, else null. For frontend auth check."""
+    """Get current user if logged in, else null. Includes guild_roles for permission checks."""
     if not user:
         return None
     user = await promote_guild_moderator_if_needed(user)
-    return {"username": user.username, "role": user.role, "is_global_admin": is_global_admin(user)}
+    guild_roles = []
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(GuildModerator, GuildConfig)
+            .outerjoin(GuildConfig, GuildConfig.guild_id == GuildModerator.guild_id)
+            .where(GuildModerator.user_id == user.id)
+        )
+        for gm, gc in result.all():
+            guild_roles.append(_guild_role(gm, gc))
+    return {
+        "username": user.username,
+        "role": user.role,
+        "is_global_admin": is_global_admin(user),
+        "guild_roles": guild_roles,
+    }
 
 
 @router.get("/my-guilds")
@@ -101,8 +147,8 @@ async def get_my_guilds(user: User = Depends(require_user)):
     user = await promote_guild_moderator_if_needed(user)
     headers = {"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"} if config.INTERNAL_API_SECRET else {}
 
-    # Global admin/moderator: return all guilds the bot is in
-    if user.role in ("admin", "moderator"):
+    # Global admin only: return all guilds the bot is in. Guild moderators see only their guilds.
+    if is_global_admin(user):
         if not config.BOT_INTERNAL_URL or not headers:
             return {"guilds": []}
         try:
@@ -164,13 +210,37 @@ async def get_my_guilds(user: User = Depends(require_user)):
     return {"guilds": guilds}
 
 
-@router.get("/users", response_model=list[UserResponse])
+@router.get("/users", response_model=list[UserWithGuildsResponse])
 async def list_users(admin: User = Depends(require_global_admin_user)):
-    """List all users (admin only)."""
+    """List all users with guild memberships and roles (admin only)."""
     async with async_session_factory() as session:
-        result = await session.execute(select(User).order_by(User.username))
+        result = await session.execute(
+            select(User).order_by(User.username).options(selectinload(User.guild_moderators))
+        )
         users = result.scalars().all()
-        return [UserResponse(username=u.username, role=u.role, is_global_admin=is_global_admin(u)) for u in users]
+        out = []
+        for u in users:
+            guilds = []
+            for gm in u.guild_moderators:
+                gc_result = await session.execute(select(GuildConfig).where(GuildConfig.guild_id == gm.guild_id))
+                gc = gc_result.scalar_one_or_none()
+                guild_name = gc.name if gc else str(gm.guild_id)
+                guilds.append(
+                    UserGuildMembership(
+                        guild_id=str(gm.guild_id),
+                        guild_name=guild_name,
+                        role=gm.role,
+                    )
+                )
+            out.append(
+                UserWithGuildsResponse(
+                    username=u.username,
+                    role=u.role,
+                    is_global_admin=is_global_admin(u),
+                    guilds=guilds,
+                )
+            )
+        return out
 
 
 @router.post("/users", response_model=UserResponse)

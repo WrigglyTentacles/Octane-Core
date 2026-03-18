@@ -9,7 +9,7 @@ import discord
 from sqlalchemy import delete as sql_delete, select
 
 import config
-from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamManualMember, Tournament, TournamentManualEntry, TournamentSignupMessage
+from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamManualMember, Tournament, TournamentManualEntry, TournamentSignupMessage, TournamentBracketMessage
 from bot.services.discord_embeds import (
     build_results_embed,
     build_round_lineup_embed,
@@ -23,17 +23,82 @@ logger = logging.getLogger("octane.http")
 SIGNUP_EMOJI = "📝"
 
 
+async def _delete_tournament_messages(bot, session, tournament_id: int, *, include_results: bool = False) -> int:
+    """Delete Discord messages for this tournament. Returns count of messages deleted.
+    - include_results=False: signup + teams/round only (for post-results flow)
+    - include_results=True: all tracked messages including results (for cleanup-only)
+    """
+    deleted = 0
+    # Signup messages
+    result = await session.execute(
+        select(TournamentSignupMessage).where(TournamentSignupMessage.tournament_id == tournament_id)
+    )
+    for sm in result.scalars().all():
+        try:
+            ch = bot.get_channel(sm.channel_id) or await bot.fetch_channel(sm.channel_id)
+            if ch:
+                msg = await ch.fetch_message(sm.message_id)
+                await msg.delete()
+                deleted += 1
+        except Exception as e:
+            logger.debug("Could not delete signup message %s: %s", sm.message_id, e)
+        await session.delete(sm)
+
+    # Bracket messages (teams, round, optionally results)
+    if include_results:
+        result = await session.execute(
+            select(TournamentBracketMessage).where(
+                TournamentBracketMessage.tournament_id == tournament_id
+            )
+        )
+    else:
+        result = await session.execute(
+            select(TournamentBracketMessage).where(
+                TournamentBracketMessage.tournament_id == tournament_id,
+                TournamentBracketMessage.message_type != "results",
+            )
+        )
+    for bm in result.scalars().all():
+        try:
+            ch = bot.get_channel(bm.channel_id) or await bot.fetch_channel(bm.channel_id)
+            if ch:
+                msg = await ch.fetch_message(bm.message_id)
+                await msg.delete()
+                deleted += 1
+        except Exception as e:
+            logger.debug("Could not delete bracket message %s: %s", bm.message_id, e)
+        await session.delete(bm)
+
+    if not include_results:
+        # Delete old results rows (we'll add new one in post-results flow)
+        await session.execute(
+            sql_delete(TournamentBracketMessage).where(
+                TournamentBracketMessage.tournament_id == tournament_id,
+                TournamentBracketMessage.message_type == "results",
+            )
+        )
+    return deleted
+
+
 def _build_signup_embed(t: Tournament, count: int, guild_id: int) -> discord.Embed:
     """Build signup embed (same as tournaments cog). Uses guild-aware URL."""
     from web.api.web_urls import bracket_url
 
     deadline_line = ""
+    starts_line = ""
+    reg_ts = None
     if t.registration_deadline:
         dt = t.registration_deadline
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
+        reg_ts = int(dt.timestamp())
+        deadline_line = f"**Signup deadline:** <t:{reg_ts}:F> (<t:{reg_ts}:R>)\n\n"
+    if t.starts_at:
+        dt = t.starts_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         ts = int(dt.timestamp())
-        deadline_line = f"**Signup deadline:** <t:{ts}:F> (<t:{ts}:R>)\n\n"
+        starts_line = f"**Tournament begins:** <t:{ts}:F> (<t:{ts}:R>)\n\n"
     current_link = ""
     url = bracket_url(guild_id)
     if url:
@@ -44,6 +109,7 @@ def _build_signup_embed(t: Tournament, count: int, guild_id: int) -> discord.Emb
             f"**Format:** {t.format}\n"
             f"**MMR Playlist:** {t.mmr_playlist}\n\n"
             f"{deadline_line}"
+            f"{starts_line}"
             f"React with {SIGNUP_EMOJI} to sign up!\n"
             f"Remove your reaction to drop out.\n\n"
             f"*Or use `/tournament register` with ID **{t.id}***"
@@ -248,6 +314,10 @@ async def _handle_post_results(request: aiohttp.web.Request) -> aiohttp.web.Resp
             )
         embed = build_results_embed(t, champ_name, champ_members)
 
+        # Clean up old messages (signup, teams, round) so only results remain
+        await _delete_tournament_messages(bot, session, tournament_id)
+        await session.commit()
+
         try:
             channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
         except Exception as e:
@@ -267,6 +337,132 @@ async def _handle_post_results(request: aiohttp.web.Request) -> aiohttp.web.Resp
                 {"error": f"Failed to post: {e}. Check bot permissions."},
                 status=400,
             )
+        session.add(
+            TournamentBracketMessage(
+                message_id=msg.id,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                tournament_id=tournament_id,
+                message_type="results",
+            )
+        )
+        await session.commit()
+        return aiohttp.web.json_response({"ok": True, "message_id": msg.id})
+    return aiohttp.web.json_response({"error": "Internal error"}, status=500)
+
+
+async def _handle_cleanup_messages(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """POST /internal/cleanup-messages - Delete all tracked Discord messages for a tournament."""
+    err = _check_internal_auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return aiohttp.web.json_response({"error": "Invalid JSON"}, status=400)
+
+    tournament_id = body.get("tournament_id")
+    if not isinstance(tournament_id, int):
+        return aiohttp.web.json_response(
+            {"error": "tournament_id required (integer)"},
+            status=400,
+        )
+
+    bot = request.app["bot"]
+    from bot.models.base import get_async_session
+
+    async for session in get_async_session():
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            return aiohttp.web.json_response(
+                {"error": "Tournament not found"}, status=404
+            )
+        deleted = await _delete_tournament_messages(
+            bot, session, tournament_id, include_results=True
+        )
+        await session.commit()
+        return aiohttp.web.json_response({"ok": True, "deleted": deleted})
+    return aiohttp.web.json_response({"error": "Internal error"}, status=500)
+
+
+def _build_tournament_begins_embed(t: Tournament) -> discord.Embed:
+    """Build standalone embed for tournament begins announcement."""
+    dt = t.starts_at
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    ts = int(dt.timestamp())
+    embed = discord.Embed(
+        title=f"⏰ {t.name} begins",
+        description=f"**Tournament begins:** <t:{ts}:F> (<t:{ts}:R>)",
+        color=discord.Color.blue(),
+    )
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
+async def _handle_post_tournament_begins(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """POST /internal/post-tournament-begins - Post standalone tournament begins message to Discord."""
+    err = _check_internal_auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return aiohttp.web.json_response({"error": "Invalid JSON"}, status=400)
+
+    tournament_id = body.get("tournament_id")
+    channel_id = body.get("channel_id")
+    guild_id = body.get("guild_id")
+    if not all(isinstance(x, int) for x in (tournament_id, channel_id, guild_id)):
+        return aiohttp.web.json_response(
+            {"error": "tournament_id, channel_id, guild_id required (integers)"},
+            status=400,
+        )
+
+    bot = request.app["bot"]
+    from bot.models.base import get_async_session
+
+    async for session in get_async_session():
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            return aiohttp.web.json_response(
+                {"error": "Tournament not found"}, status=404
+            )
+        if not t.starts_at:
+            return aiohttp.web.json_response(
+                {"error": "Tournament has no start time. Set it in Set times first."},
+                status=400,
+            )
+        embed = _build_tournament_begins_embed(t)
+        try:
+            channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        except Exception as e:
+            logger.exception("Failed to fetch channel %s", channel_id)
+            return aiohttp.web.json_response(
+                {"error": f"Failed to fetch channel: {e}"}, status=400
+            )
+        if not channel or channel.guild.id != guild_id:
+            return aiohttp.web.json_response(
+                {"error": "Channel not found or wrong guild"}, status=400
+            )
+        try:
+            msg = await channel.send(embed=embed)
+        except Exception as e:
+            logger.exception("Failed to post tournament begins")
+            return aiohttp.web.json_response(
+                {"error": f"Failed to post: {e}. Check bot permissions."},
+                status=400,
+            )
+        session.add(
+            TournamentBracketMessage(
+                message_id=msg.id,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                tournament_id=tournament_id,
+                message_type="begins",
+            )
+        )
+        await session.commit()
         return aiohttp.web.json_response({"ok": True, "message_id": msg.id})
     return aiohttp.web.json_response({"error": "Internal error"}, status=500)
 
@@ -335,6 +531,16 @@ async def _handle_post_bracket(request: aiohttp.web.Request) -> aiohttp.web.Resp
             for embed in embeds:
                 msg = await channel.send(embed=embed)
                 msg_ids.append(msg.id)
+                session.add(
+                    TournamentBracketMessage(
+                        message_id=msg.id,
+                        channel_id=channel_id,
+                        guild_id=guild_id,
+                        tournament_id=tournament_id,
+                        message_type="round",
+                    )
+                )
+            await session.commit()
         except Exception as e:
             logger.exception("Failed to post bracket")
             return aiohttp.web.json_response(
@@ -396,6 +602,16 @@ async def _handle_post_teams(request: aiohttp.web.Request) -> aiohttp.web.Respon
                 {"error": f"Failed to post: {e}. Check bot permissions."},
                 status=400,
             )
+        session.add(
+            TournamentBracketMessage(
+                message_id=msg.id,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                tournament_id=tournament_id,
+                message_type="teams",
+            )
+        )
+        await session.commit()
         return aiohttp.web.json_response({"ok": True, "message_id": msg.id})
     return aiohttp.web.json_response({"error": "Internal error"}, status=500)
 
@@ -477,6 +693,8 @@ def create_app(bot) -> aiohttp.web.Application:
     app["bot"] = bot
     app.router.add_post("/internal/post-signup", _handle_post_signup)
     app.router.add_post("/internal/post-results", _handle_post_results)
+    app.router.add_post("/internal/cleanup-messages", _handle_cleanup_messages)
+    app.router.add_post("/internal/post-tournament-begins", _handle_post_tournament_begins)
     app.router.add_post("/internal/post-bracket", _handle_post_bracket)
     app.router.add_post("/internal/post-teams", _handle_post_teams)
     app.router.add_post("/internal/refresh-players", _handle_refresh_players)

@@ -117,6 +117,17 @@ button.btn-accent:hover:not(:disabled) {
   border-color: var(--accent);
 }
 
+button.btn-secondary {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+button.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
 button.btn-tournament {
   background: rgba(96, 165, 250, 0.2);
   color: #60a5fa;

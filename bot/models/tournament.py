@@ -42,6 +42,7 @@ class Tournament(Base):
     format: Mapped[str] = mapped_column(String(16), nullable=False)  # 1v1, 2v2, 3v3
     mmr_playlist: Mapped[str] = mapped_column(String(32), nullable=False)  # solo_duel, doubles, etc.
     registration_deadline: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    starts_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # When tournament begins
     status: Mapped[str] = mapped_column(String(32), default="open")  # open, closed, in_progress, completed
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

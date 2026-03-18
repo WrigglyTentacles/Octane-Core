@@ -5,7 +5,7 @@ import { useMyGuilds } from './useMyGuilds';
 
 /** Dropdown to switch between guilds the user can moderate. Shown when user has edit rights and guilds. */
 export function GuildSelector() {
-  const { user, canEdit, isGlobalAdmin } = useAuth();
+  const { user, hasAnyEditPermission, isGlobalAdmin } = useAuth();
   const { guilds, loading } = useMyGuilds();
   const navigate = useNavigate();
   const location = useLocation();
@@ -15,14 +15,14 @@ export function GuildSelector() {
 
   // Guild-scoped moderators: redirect from / to a guild so they only see that guild's tournaments
   useEffect(() => {
-    if (!user || !canEdit || loading || isGlobalAdmin) return;
+    if (!user || !hasAnyEditPermission || loading || isGlobalAdmin) return;
     if (isOnGuildRoute) return;
     if (guilds.length === 0) return;
     const g = guilds[0];
     if (g?.guild_id) navigate(`/s/${g.guild_id}${location.pathname === '/' ? '' : location.pathname}`, { replace: true });
-  }, [user, canEdit, loading, guilds, isOnGuildRoute, navigate, location.pathname, isGlobalAdmin]);
+  }, [user, hasAnyEditPermission, loading, guilds, isOnGuildRoute, navigate, location.pathname, isGlobalAdmin]);
 
-  if (!user || !canEdit || loading || guilds.length === 0) return null;
+  if (!user || !hasAnyEditPermission || loading || guilds.length === 0) return null;
 
   // Build path for a guild: /s/{guildId} + current subpath (e.g. /current, /winners)
   const subpath = location.pathname.replace(/^\/s\/\d+/, '') || '';

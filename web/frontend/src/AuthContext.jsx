@@ -10,8 +10,16 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const token = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null;
 
-  const canEdit = user && (user.role === 'moderator' || user.role === 'admin');
+  // Hierarchy: global admin > guild admin > guild moderator > guild user (read-only)
+  // canEdit: brackets, tournaments (moderator+ in guild, or global admin)
+  // canEditGuildSettings: guild settings only (guild admin or global admin)
   const isGlobalAdmin = user && (user.is_global_admin === true || user.role === 'admin');
+  const hasGuildModerator = (guildId) =>
+    isGlobalAdmin || (user?.guild_roles?.some((g) => String(g.guild_id) === String(guildId)) ?? false);
+  const hasGuildAdmin = (guildId) =>
+    isGlobalAdmin || (user?.guild_roles?.find((g) => String(g.guild_id) === String(guildId))?.role === 'admin');
+  const canEdit = (guildId) => (guildId ? hasGuildModerator(guildId) : isGlobalAdmin);
+  const hasAnyEditPermission = isGlobalAdmin || (user?.guild_roles?.length > 0);
 
   const fetchUser = useCallback(async () => {
     const t = localStorage.getItem(TOKEN_KEY);
@@ -83,7 +91,20 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, canEdit, isGlobalAdmin, login, logout, authFetch, fetchUser }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        canEdit,
+        canEditGuildSettings: hasGuildAdmin,
+        hasAnyEditPermission,
+        isGlobalAdmin,
+        login,
+        logout,
+        authFetch,
+        fetchUser,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

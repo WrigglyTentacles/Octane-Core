@@ -1735,7 +1735,7 @@ function App({ isCurrentPage = false }) {
   const { guildId, apiBase } = useGuild();
   const API = apiBase; // Guild-scoped: list, current, winners, create
   const API_GLOBAL = '/api'; // Global: tournament detail, bracket, settings (not under /api/s/:guild)
-  const effectiveCanEdit = isCurrentPage ? false : canEdit;
+  const effectiveCanEdit = isCurrentPage ? false : canEdit(guildId);
   const location = useLocation();
   const navigate = useNavigate();
   const [siteTitle, setSiteTitle] = useState('Octane Bracket Manager');
@@ -1767,9 +1767,11 @@ function App({ isCurrentPage = false }) {
   const [newTournamentName, setNewTournamentName] = useState('');
   const [newTournamentFormat, setNewTournamentFormat] = useState('1v1');
   const [newTournamentDeadline, setNewTournamentDeadline] = useState('');
+  const [newTournamentStartsAt, setNewTournamentStartsAt] = useState('');
   const [bracketType, setBracketType] = useState('single_elim');
   const [renameValue, setRenameValue] = useState('');
   const [deadlineValue, setDeadlineValue] = useState('');
+  const [startsAtValue, setStartsAtValue] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuSection, setMenuSection] = useState(null); // null | 'rename' | 'create' | 'deadline' | 'pollInterval'
@@ -2401,18 +2403,28 @@ function App({ isCurrentPage = false }) {
     setPostDiscordLoading(type);
     setError(null);
     try {
+      const isCleanup = type === 'cleanup';
       const url = type === 'signup'
         ? `${API_GLOBAL}/tournaments/${tournamentId}/post-signup`
-        : `${API_GLOBAL}/tournaments/${tournamentId}/bracket/post-${type}`;
+        : isCleanup
+          ? `${API_GLOBAL}/tournaments/${tournamentId}/bracket/cleanup-messages`
+          : type === 'begins'
+            ? `${API_GLOBAL}/tournaments/${tournamentId}/bracket/post-tournament-begins`
+            : `${API_GLOBAL}/tournaments/${tournamentId}/bracket/post-${type}`;
       const res = await authFetch(url, {
         method: 'POST',
         headers: type === 'signup' ? { 'Content-Type': 'application/json' } : undefined,
         body: type === 'signup' ? JSON.stringify({}) : undefined,
       });
       const data = await parseJson(res);
-      if (!res.ok) throw new Error(data?.detail || data?.error || `Failed to post ${type}`);
-      const label = type === 'signup' ? 'tournament signup' : type;
-      setCopyFeedback(`Posted ${label} to Discord`);
+      if (!res.ok) throw new Error(data?.detail || data?.error || `Failed to ${isCleanup ? 'cleanup' : 'post ' + type}`);
+      if (isCleanup) {
+        const n = data?.deleted ?? 0;
+        setCopyFeedback(`Cleaned up ${n} message(s) from Discord`);
+      } else {
+        const label = type === 'signup' ? 'tournament signup' : type === 'begins' ? 'tournament begins' : type;
+        setCopyFeedback(`Posted ${label} to Discord`);
+      }
       setTimeout(() => setCopyFeedback(null), 2000);
     } catch (err) {
       setError(err.message);
@@ -2495,7 +2507,7 @@ function App({ isCurrentPage = false }) {
             {user ? (
               <>
                 <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>{user.username} ({user.role})</span>
-                {(isGlobalAdmin || (canEdit && guildId)) && (
+                {(isGlobalAdmin || (guildId && canEdit(guildId))) && (
                   <Link to={guildId ? `/s/${guildId}/settings` : '/settings'} style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 14 }}>Settings</Link>
                 )}
                 <button onClick={logout} style={{ padding: '8px 14px', fontSize: 14 }}>Logout</button>
@@ -2537,7 +2549,7 @@ function App({ isCurrentPage = false }) {
                   <span style={{ fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 20, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.color}40` }}>
                     {cfg.label}
                   </span>
-                  {canEdit && t.status === 'open' && (
+                  {canEdit(guildId) && t.status === 'open' && (
                     <button
                       className="btn-accent"
                       disabled={!discordConfigReady}
@@ -2633,9 +2645,30 @@ function App({ isCurrentPage = false }) {
                           <button onClick={() => { setMenuSection('rename'); setRenameValue(tournaments.find((t) => t.id === tournamentId)?.name ?? ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }}>
                             Rename
                           </button>
-                          <button onClick={async () => { setMenuSection('deadline'); const list = await fetchTournaments(); const d = list?.find((t) => t.id === tournamentId)?.registration_deadline; setDeadlineValue(d ? utcToDatetimeLocal(d) : ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Registration signup deadline">
-                            Set deadline
+                          <button onClick={async () => { setMenuSection('deadline'); const list = await fetchTournaments(); const t = list?.find((x) => x.id === tournamentId); setDeadlineValue(t?.registration_deadline ? utcToDatetimeLocal(t.registration_deadline) : ''); setStartsAtValue(t?.starts_at ? utcToDatetimeLocal(t.starts_at) : ''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Signup deadline and tournament start time">
+                            Set times
                           </button>
+                          {tournaments.find((t) => t.id === tournamentId)?.starts_at && (
+                            <button
+                              disabled={!discordConfigReady}
+                              onClick={async () => {
+                                if (!discordConfigReady) return;
+                                try {
+                                  const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}/bracket/post-tournament-begins`, { method: 'POST' });
+                                  const data = await res.json();
+                                  if (!res.ok) throw new Error(data?.detail || data?.error || 'Failed to post');
+                                  setError('');
+                                  setMenuOpen(false);
+                                } catch (err) {
+                                  setError(err.message);
+                                }
+                              }}
+                              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4, opacity: discordConfigReady ? 1 : 0.6 }}
+                              title="Post standalone tournament begins message to Discord bracket channel"
+                            >
+                              Post tournament begins
+                            </button>
+                          )}
                           {tournaments.find((t) => t.id === tournamentId)?.status === 'open' && (
                             <button
                               disabled={!discordConfigReady}
@@ -2699,7 +2732,7 @@ function App({ isCurrentPage = false }) {
                         </>
                       )}
                       <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0' }} />
-                      <button onClick={() => { setMenuSection('create'); setNewTournamentName(''); setNewTournamentDeadline(''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px' }}>
+                      <button onClick={() => { setMenuSection('create'); setNewTournamentName(''); setNewTournamentDeadline(''); setNewTournamentStartsAt(''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px' }}>
                         Create new tournament
                       </button>
                     </>
@@ -2722,16 +2755,9 @@ function App({ isCurrentPage = false }) {
                     </div>
                   ) : menuSection === 'deadline' ? (
                     <div>
-                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Signup deadline</div>
-                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Paste from Discord (e.g. &lt;t:1771834500:R&gt;)</label>
-                      <input
-                        type="text"
-                        placeholder="<t:1771834500:R>"
-                        onPaste={(e) => { const v = parseDiscordTimestamp(e.clipboardData.getData('text')); if (v) { e.preventDefault(); setDeadlineValue(v); } }}
-                        onChange={(e) => { const v = parseDiscordTimestamp(e.target.value); if (v) setDeadlineValue(v); }}
-                        style={{ width: '100%', marginBottom: 12, padding: '8px 10px', fontSize: 13 }}
-                      />
-                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Or pick date and time</label>
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Signup deadline &amp; Tournament begins</div>
+                      <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>If only one is set, the other defaults to it.</p>
+                      <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Signup deadline</label>
                       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
                         <input
                           type="date"
@@ -2747,17 +2773,37 @@ function App({ isCurrentPage = false }) {
                           style={{ flex: 1, minWidth: 100, padding: '8px 10px' }}
                         />
                       </div>
-                      {deadlineValue && (
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
-                          Copy for Discord: <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(deadlineValue, 'R')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '4px 8px', marginRight: 6 }}>relative (:R)</button>
-                          <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(deadlineValue, 'F')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '4px 8px', marginRight: 6 }}>full (:F)</button>
-                          {copyFeedback && <span style={{ color: 'var(--success)', marginLeft: 4 }}>{copyFeedback}</span>}
-                        </div>
-                      )}
+                      <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Tournament begins</label>
+                      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+                        <input
+                          type="date"
+                          value={startsAtValue ? startsAtValue.slice(0, 10) : ''}
+                          onChange={(e) => setStartsAtValue(e.target.value ? e.target.value + 'T' + (startsAtValue ? startsAtValue.slice(11, 16) : '19:00') : '')}
+                          style={{ flex: 1, minWidth: 140, padding: '8px 10px' }}
+                        />
+                        <input
+                          type="time"
+                          value={startsAtValue ? startsAtValue.slice(11, 16) : '19:00'}
+                          onChange={(e) => setStartsAtValue((startsAtValue ? startsAtValue.slice(0, 10) : new Date().toISOString().slice(0, 10)) + 'T' + e.target.value)}
+                          style={{ flex: 1, minWidth: 100, padding: '8px 10px' }}
+                        />
+                      </div>
+                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Paste from Discord (e.g. &lt;t:1771834500:R&gt;)</label>
+                      <input
+                        type="text"
+                        placeholder="<t:1771834500:R>"
+                        onPaste={(e) => { const v = parseDiscordTimestamp(e.clipboardData.getData('text')); if (v) { e.preventDefault(); setDeadlineValue(v); } }}
+                        onChange={(e) => { const v = parseDiscordTimestamp(e.target.value); if (v) setDeadlineValue(v); }}
+                        style={{ width: '100%', marginBottom: 12, padding: '8px 10px', fontSize: 13 }}
+                      />
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button className="primary" onClick={async () => {
                           try {
-                            const body = { registration_deadline: deadlineValue ? new Date(deadlineValue).toISOString() : '' };
+                            const body = {};
+                            if (deadlineValue) body.registration_deadline = new Date(deadlineValue).toISOString();
+                            else body.registration_deadline = '';
+                            if (startsAtValue) body.starts_at = new Date(startsAtValue).toISOString();
+                            else body.starts_at = '';
                             const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}`, {
                               method: 'PATCH',
                               headers: { 'Content-Type': 'application/json' },
@@ -2774,7 +2820,7 @@ function App({ isCurrentPage = false }) {
                             const res = await authFetch(`${API_GLOBAL}/tournaments/${tournamentId}`, {
                               method: 'PATCH',
                               headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ registration_deadline: '' }),
+                              body: JSON.stringify({ registration_deadline: '', starts_at: '' }),
                             });
                             if (!res.ok) throw new Error((await parseJson(res))?.detail || 'Failed');
                             await fetchTournaments();
@@ -2830,16 +2876,8 @@ function App({ isCurrentPage = false }) {
                         <option value="3v3">3v3</option>
                         <option value="4v4">4v4</option>
                       </select>
+                      <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>If only one is set, the other defaults to it.</p>
                       <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Signup deadline (optional)</label>
-                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Paste from Discord (e.g. &lt;t:1771834500:R&gt;)</label>
-                      <input
-                        type="text"
-                        placeholder="<t:1771834500:R>"
-                        onPaste={(e) => { const v = parseDiscordTimestamp(e.clipboardData.getData('text')); if (v) { e.preventDefault(); setNewTournamentDeadline(v); } }}
-                        onChange={(e) => { const v = parseDiscordTimestamp(e.target.value); if (v) setNewTournamentDeadline(v); }}
-                        style={{ width: '100%', marginBottom: 8, padding: '8px 10px', fontSize: 13 }}
-                      />
-                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Or pick date and time</label>
                       <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
                         <input
                           type="date"
@@ -2854,13 +2892,29 @@ function App({ isCurrentPage = false }) {
                           style={{ flex: 1, minWidth: 100, padding: '8px 10px' }}
                         />
                       </div>
-                      {newTournamentDeadline && (
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-                          Copy for Discord: <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(newTournamentDeadline, 'R')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '4px 8px', marginRight: 6 }}>relative (:R)</button>
-                          <button type="button" onClick={() => navigator.clipboard?.writeText(toDiscordTimestamp(newTournamentDeadline, 'F')).then(() => { setError(null); setCopyFeedback('Copied!'); setTimeout(() => setCopyFeedback(null), 1500); }).catch(() => setError('Copy failed'))} style={{ padding: '4px 8px', marginRight: 6 }}>full (:F)</button>
-                          {copyFeedback && <span style={{ color: 'var(--success)', marginLeft: 4 }}>{copyFeedback}</span>}
-                        </div>
-                      )}
+                      <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Tournament begins (optional)</label>
+                      <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
+                        <input
+                          type="date"
+                          value={newTournamentStartsAt ? newTournamentStartsAt.slice(0, 10) : ''}
+                          onChange={(e) => setNewTournamentStartsAt(e.target.value ? e.target.value + 'T' + (newTournamentStartsAt ? newTournamentStartsAt.slice(11, 16) : '19:00') : '')}
+                          style={{ flex: 1, minWidth: 140, padding: '8px 10px' }}
+                        />
+                        <input
+                          type="time"
+                          value={newTournamentStartsAt ? newTournamentStartsAt.slice(11, 16) : '19:00'}
+                          onChange={(e) => setNewTournamentStartsAt((newTournamentStartsAt ? newTournamentStartsAt.slice(0, 10) : new Date().toISOString().slice(0, 10)) + 'T' + e.target.value)}
+                          style={{ flex: 1, minWidth: 100, padding: '8px 10px' }}
+                        />
+                      </div>
+                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Or paste from Discord (e.g. &lt;t:1771834500:R&gt;)</label>
+                      <input
+                        type="text"
+                        placeholder="<t:1771834500:R>"
+                        onPaste={(e) => { const v = parseDiscordTimestamp(e.clipboardData.getData('text')); if (v) { e.preventDefault(); setNewTournamentDeadline(v); } }}
+                        onChange={(e) => { const v = parseDiscordTimestamp(e.target.value); if (v) setNewTournamentDeadline(v); }}
+                        style={{ width: '100%', marginBottom: 8, padding: '8px 10px', fontSize: 13 }}
+                      />
                       <div style={{ display: 'flex', gap: 8 }}>
                         <button
                           className="primary"
@@ -2868,9 +2922,8 @@ function App({ isCurrentPage = false }) {
                             if (!newTournamentName.trim()) return;
                             try {
                               const body = { name: newTournamentName.trim(), format: newTournamentFormat };
-                              if (newTournamentDeadline) {
-                                body.registration_deadline = new Date(newTournamentDeadline).toISOString();
-                              }
+                              if (newTournamentDeadline) body.registration_deadline = new Date(newTournamentDeadline).toISOString();
+                              if (newTournamentStartsAt) body.starts_at = new Date(newTournamentStartsAt).toISOString();
                               // Pass guild_id as string to avoid JS number precision loss (snowflakes > Number.MAX_SAFE_INTEGER)
                               if (guildId) body.guild_id = guildId;
                               const res = await authFetch(`${API_GLOBAL}/tournaments`, {
@@ -2882,6 +2935,7 @@ function App({ isCurrentPage = false }) {
                               if (!res.ok) throw new Error(data?.detail || 'Failed');
                               setNewTournamentName('');
                               setNewTournamentDeadline('');
+                              setNewTournamentStartsAt('');
                               setMenuSection(null);
                               setMenuOpen(false);
                               await fetchTournaments();
@@ -2958,7 +3012,7 @@ function App({ isCurrentPage = false }) {
               onRenameParticipant={renameParticipant}
               onRenameStandby={renameStandby}
               onMoveEntry={moveEntry}
-              readOnly={!canEdit}
+              readOnly={!canEdit(guildId)}
             />
           )}
           {!isCurrentPage && activeTab === 'teams' && (
@@ -2970,7 +3024,7 @@ function App({ isCurrentPage = false }) {
               onSubstitute={substituteStandby}
               onRegenerate={regenerateTeams}
               format={tournaments.find((t) => t.id === tournamentId)?.format}
-              readOnly={!canEdit}
+              readOnly={!canEdit(guildId)}
             />
           )}
           {(isCurrentPage || activeTab === 'bracket') && (() => {
@@ -3010,7 +3064,7 @@ function App({ isCurrentPage = false }) {
                         <option value="round_robin">Round robin</option>
                       </select>
                     </div>
-                    {canEdit && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
+                    {canEdit(guildId) && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
                       Generate Bracket
                     </button>}
                   </div>
@@ -3024,7 +3078,7 @@ function App({ isCurrentPage = false }) {
               ) : hasBracket ? (
                 <div>
                   <BracketSummary summary={bracketSummary} bracket={bracket} isTeam={tournaments.find((t) => t.id === tournamentId)?.format !== '1v1'} compact={false} />
-                  {canEdit && (
+                  {canEdit(guildId) && (
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
                       <button className="btn-danger" onClick={resetBracket} disabled={loading} title="Delete bracket and require regenerate">
                         Reset
@@ -3038,6 +3092,10 @@ function App({ isCurrentPage = false }) {
                       </button>
                       <button className="btn-accent" onClick={() => postToDiscord('results')} disabled={!!postDiscordLoading} title="Post tournament results to Discord (requires champion)">
                         {postDiscordLoading === 'results' ? 'Posting…' : 'Post Results'}
+                      </button>
+                      <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>|</span>
+                      <button className="btn-secondary" onClick={() => postToDiscord('cleanup')} disabled={!!postDiscordLoading} title="Delete all tracked Discord messages for this tournament (signup, teams, round, results)">
+                        {postDiscordLoading === 'cleanup' ? 'Cleaning…' : 'Cleanup'}
                       </button>
                       {copyFeedback && <span style={{ color: 'var(--accent)', fontSize: 13 }}>{copyFeedback}</span>}
                     </div>
@@ -3054,7 +3112,7 @@ function App({ isCurrentPage = false }) {
                       <option value="double_elim">Double elimination</option>
                       <option value="round_robin">Round robin</option>
                     </select>
-                    {canEdit && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>Generate Bracket</button>}
+                    {canEdit(guildId) && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>Generate Bracket</button>}
                   </div>
                   <BracketView bracket={previewBracket} tournament={previewBracket.tournament} teams={teams} participants={participants} standby={standby} isPreview canEdit={false} />
                 </div>
@@ -3068,7 +3126,7 @@ function App({ isCurrentPage = false }) {
                       <option value="double_elim">Double elimination (8+ teams)</option>
                     </select>
                   </div>
-                  {canEdit && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
+                    {canEdit(guildId) && <button className="primary" onClick={generateBracket} disabled={generateDisabled} title={generateDisabled && bracketType === 'double_elim' ? 'Double elimination requires 8+ teams' : undefined}>
                     Generate Bracket
                   </button>}
                 </div>

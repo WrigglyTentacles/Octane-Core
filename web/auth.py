@@ -1,4 +1,11 @@
-"""Authentication for web API: JWT, password hashing, role checks."""
+"""Authentication for web API: JWT, password hashing, role checks.
+
+Site hierarchy:
+- Global site admin: Full access (site settings, user management, all guilds). User.role=admin or GLOBAL_ADMIN_USERNAMES.
+- Guild admin: Edit guild settings (theme, Discord channels). GuildModerator.role=admin for that guild.
+- Guild moderator: Edit brackets, create/delete tournaments, backup/restore. No guild settings. GuildModerator.role=moderator.
+- Guild user: Read-only access to brackets. No GuildModerator entry for that guild.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -242,15 +249,10 @@ async def require_moderator_user(
     return require_moderator(user)
 
 
-async def require_moderator_for_guild(
-    guild_id: int,
-    user: User = Depends(require_user),
-) -> User:
-    """Dependency: require user can moderate this guild (global admin OR GuildModerator)."""
+async def check_moderator_for_guild(guild_id: int, user: User) -> None:
+    """Raise 403 if user cannot moderate this guild. Used by dependencies."""
     if is_global_admin(user):
-        return user
-    if user.role == "moderator":
-        return user  # Guild-scoped moderators have User.role=moderator
+        return
     async with async_session_factory() as session:
         result = await session.execute(
             select(GuildModerator).where(
@@ -260,11 +262,35 @@ async def require_moderator_for_guild(
         )
         gm = result.scalar_one_or_none()
         if gm and gm.role in ("moderator", "admin"):
-            return user
+            return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Moderator access required for this server",
     )
+
+
+async def require_moderator_for_tournament(
+    tournament_id: int,
+    user: User = Depends(require_user),
+) -> User:
+    """Require user can moderate this tournament (global admin OR guild moderator/admin for tournament's guild)."""
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if t.guild_id and t.guild_id != 0:
+        await check_moderator_for_guild(t.guild_id, user)
+        return user
+    return require_moderator(user)
+
+
+async def require_moderator_for_guild(
+    guild_id: int,
+    user: User = Depends(require_user),
+) -> User:
+    """Dependency: require user can moderate this guild (global admin OR GuildModerator)."""
+    await check_moderator_for_guild(guild_id, user)
+    return user
 
 
 async def require_guild_admin(

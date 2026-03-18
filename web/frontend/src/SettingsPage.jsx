@@ -11,7 +11,7 @@ export default function SettingsPage() {
   const { guildId: ctxGuildId, apiBase } = useGuild();
   const effectiveGuildId = guildId || ctxGuildId;
   const settingsApi = effectiveGuildId ? `/api/s/${effectiveGuildId}` : API;
-  const { authFetch, isGlobalAdmin, user: currentUser } = useAuth();
+  const { authFetch, isGlobalAdmin, canEditGuildSettings } = useAuth();
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -311,7 +311,7 @@ export default function SettingsPage() {
     }
   };
 
-  const canEditSettings = isGlobalAdmin || (effectiveGuildId && currentUser?.role === 'moderator');
+  const canEditSettings = isGlobalAdmin || (effectiveGuildId && canEditGuildSettings(effectiveGuildId));
   if (!canEditSettings) {
     return (
       <div style={{ padding: 32, color: 'var(--text-muted)' }}>
@@ -658,6 +658,7 @@ export default function SettingsPage() {
               <tr style={{ background: 'var(--bg-elevated)' }}>
                 <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Username</th>
                 <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Role</th>
+                <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Guilds</th>
                 <th style={{ padding: '10px 14px', textAlign: 'right', fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Actions</th>
               </tr>
             </thead>
@@ -674,6 +675,20 @@ export default function SettingsPage() {
                       </select>
                     ) : (
                       <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{u.role}</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontSize: 13 }}>
+                    {u.guilds?.length ? (
+                      <span title={u.guilds.map((g) => `${g.guild_name} (${g.role})`).join(', ')}>
+                        {u.guilds.map((g) => (
+                          <span key={g.guild_id} style={{ display: 'inline-block', marginRight: 8, marginBottom: 2 }}>
+                            <span style={{ color: 'var(--text-primary)' }}>{g.guild_name}</span>
+                            <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>({g.role})</span>
+                          </span>
+                        ))}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>—</span>
                     )}
                   </td>
                   <td style={{ padding: '10px 14px', textAlign: 'right' }}>

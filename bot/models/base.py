@@ -68,6 +68,9 @@ _MIGRATIONS = [
     "ALTER TABLE guild_config ADD COLUMN discord_bracket_channel_name VARCHAR(128)",
     "ALTER TABLE web_users ADD COLUMN discord_id INTEGER",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_web_users_discord_id ON web_users(discord_id)",
+    "CREATE TABLE IF NOT EXISTS tournament_bracket_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, guild_id INTEGER NOT NULL, tournament_id INTEGER NOT NULL REFERENCES tournaments(id), message_type VARCHAR(16) NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS ix_tournament_bracket_messages_tournament ON tournament_bracket_messages(tournament_id)",
+    "ALTER TABLE tournaments ADD COLUMN starts_at DATETIME",
 ]
 
 
