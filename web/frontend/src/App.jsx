@@ -2690,6 +2690,14 @@ function App({ isCurrentPage = false }) {
                               Post signup to Discord
                             </button>
                           )}
+                          <button
+                            disabled={!!postDiscordLoading}
+                            onClick={() => { postToDiscord('cleanup'); setMenuOpen(false); }}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4, opacity: postDiscordLoading ? 0.6 : 1 }}
+                            title="Delete all tracked Discord messages for this tournament (signup, teams, round, results)"
+                          >
+                            {postDiscordLoading === 'cleanup' ? 'Cleaning…' : 'Cleanup messages'}
+                          </button>
                           <button onClick={() => { cloneTournament(); setMenuOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4 }} title="Copy participants and standby to a new tournament">
                             Clone
                           </button>
@@ -3092,10 +3100,6 @@ function App({ isCurrentPage = false }) {
                       </button>
                       <button className="btn-accent" onClick={() => postToDiscord('results')} disabled={!!postDiscordLoading} title="Post tournament results to Discord (requires champion)">
                         {postDiscordLoading === 'results' ? 'Posting…' : 'Post Results'}
-                      </button>
-                      <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>|</span>
-                      <button className="btn-secondary" onClick={() => postToDiscord('cleanup')} disabled={!!postDiscordLoading} title="Delete all tracked Discord messages for this tournament (signup, teams, round, results)">
-                        {postDiscordLoading === 'cleanup' ? 'Cleaning…' : 'Cleanup'}
                       </button>
                       {copyFeedback && <span style={{ color: 'var(--accent)', fontSize: 13 }}>{copyFeedback}</span>}
                     </div>
