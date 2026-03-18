@@ -322,6 +322,54 @@ async def build_teams_embed(
     return embed
 
 
+async def build_roster_embed(
+    session: AsyncSession,
+    t,
+    guild: discord.Guild | None = None,
+    client: discord.Client | None = None,
+) -> discord.Embed:
+    """Build Discord embed listing everyone signed up (initial signup list, before teams).
+    Always shows participants + standby + Discord registrations — never teams.
+    Teams are for bracket assembly; this is the raw signup roster."""
+    lines = []
+    for list_type in ("participant", "standby"):
+        entries_result = await session.execute(
+            select(TournamentManualEntry)
+            .where(
+                TournamentManualEntry.tournament_id == t.id,
+                TournamentManualEntry.list_type == list_type,
+            )
+            .order_by(TournamentManualEntry.sort_order, TournamentManualEntry.id)
+        )
+        for e in entries_result.scalars().all():
+            prefix = "[standby] " if list_type == "standby" else ""
+            lines.append(f"• {prefix}{e.display_name}")
+    regs_result = await session.execute(
+        select(Registration)
+        .where(Registration.tournament_id == t.id)
+        .options(selectinload(Registration.player))
+    )
+    for reg in regs_result.scalars().all():
+        name = await resolve_entity(session, reg.player_id, False, guild, client)
+        lines.append(f"• {name}")
+
+    if not lines:
+        lines = ["(none yet)"]
+        count_str = "0 people"
+    else:
+        count_str = f"{len(lines)} {'person' if len(lines) == 1 else 'people'}"
+
+    embed = discord.Embed(
+        title=f"📋 Roster — {t.name}",
+        description=f"Everyone signed up ({count_str})",
+        color=discord.Color.blue(),
+    )
+    embed.add_field(name="Signed up", value="\n".join(lines), inline=False)
+    embed.set_footer(text=f"Tournament ID: {t.id}")
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
 def build_results_embed(t, champion_name: str, champion_members: list | None = None) -> discord.Embed:
     """Build Discord embed for tournament results."""
     embed = discord.Embed(

@@ -12,6 +12,7 @@ import config
 from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamManualMember, Tournament, TournamentManualEntry, TournamentSignupMessage, TournamentBracketMessage
 from bot.services.discord_embeds import (
     build_results_embed,
+    build_roster_embed,
     build_round_lineup_embed,
     build_teams_embed,
     champion_match_has_winner,
@@ -616,6 +617,70 @@ async def _handle_post_teams(request: aiohttp.web.Request) -> aiohttp.web.Respon
     return aiohttp.web.json_response({"error": "Internal error"}, status=500)
 
 
+async def _handle_post_roster(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """POST /internal/post-roster - Post full roster of everyone signed up."""
+    err = _check_internal_auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return aiohttp.web.json_response({"error": "Invalid JSON"}, status=400)
+
+    tournament_id = body.get("tournament_id")
+    channel_id = body.get("channel_id")
+    guild_id = body.get("guild_id")
+    if not all(isinstance(x, int) for x in (tournament_id, channel_id, guild_id)):
+        return aiohttp.web.json_response(
+            {"error": "tournament_id, channel_id, guild_id required (integers)"},
+            status=400,
+        )
+
+    bot = request.app["bot"]
+    from bot.models.base import get_async_session
+
+    async for session in get_async_session():
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            return aiohttp.web.json_response(
+                {"error": "Tournament not found"}, status=404
+            )
+        guild = bot.get_guild(guild_id)
+        embed = await build_roster_embed(session, t, guild, bot)
+
+        try:
+            channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        except Exception as e:
+            logger.exception("Failed to fetch channel %s", channel_id)
+            return aiohttp.web.json_response(
+                {"error": f"Failed to fetch channel: {e}"}, status=400
+            )
+        if not channel or channel.guild.id != guild_id:
+            return aiohttp.web.json_response(
+                {"error": "Channel not found or wrong guild"}, status=400
+            )
+        try:
+            msg = await channel.send(embed=embed)
+        except Exception as e:
+            logger.exception("Failed to post roster")
+            return aiohttp.web.json_response(
+                {"error": f"Failed to post: {e}. Check bot permissions."},
+                status=400,
+            )
+        session.add(
+            TournamentBracketMessage(
+                message_id=msg.id,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                tournament_id=tournament_id,
+                message_type="roster",
+            )
+        )
+        await session.commit()
+        return aiohttp.web.json_response({"ok": True, "message_id": msg.id})
+    return aiohttp.web.json_response({"error": "Internal error"}, status=500)
+
+
 async def _handle_get_guilds(request: aiohttp.web.Request) -> aiohttp.web.Response:
     """GET /internal/discord/guilds - List guilds the bot is in."""
     err = _check_internal_auth(request)
@@ -697,6 +762,7 @@ def create_app(bot) -> aiohttp.web.Application:
     app.router.add_post("/internal/post-tournament-begins", _handle_post_tournament_begins)
     app.router.add_post("/internal/post-bracket", _handle_post_bracket)
     app.router.add_post("/internal/post-teams", _handle_post_teams)
+    app.router.add_post("/internal/post-roster", _handle_post_roster)
     app.router.add_post("/internal/refresh-players", _handle_refresh_players)
     app.router.add_get("/internal/discord/guilds", _handle_get_guilds)
     app.router.add_get("/internal/discord/invite-url", _handle_invite_url)

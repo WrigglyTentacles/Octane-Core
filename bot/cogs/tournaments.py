@@ -14,6 +14,7 @@ from discord import app_commands
 from bot.checks import admin_only, mod_or_higher
 from bot.models import GuildConfig, Player, Registration, Team, Tournament, TournamentSignupMessage
 from bot.models.base import get_async_session
+from bot.services.discord_embeds import build_roster_embed
 from bot.services.rl_api import RLAPIService
 import config
 
@@ -551,6 +552,50 @@ async def post(
         if had_old:
             followup += " Previous signup post(s) were retired — delete the old message(s) if still visible to avoid confusion."
         await interaction.followup.send(followup, ephemeral=True)
+        return
+
+
+@tournament_group.command(name="post-roster", description="Post full roster of everyone signed up (Moderator+)")
+@app_commands.describe(
+    tournament_id="Tournament ID",
+    channel="Channel to post in (default: current channel)",
+)
+@mod_or_higher()
+async def post_roster(
+    interaction: discord.Interaction,
+    tournament_id: int,
+    channel: Optional[discord.TextChannel] = None,
+) -> None:
+    """Post the entire roster of people signed up for the tournament."""
+    if not interaction.guild_id:
+        await interaction.response.send_message("Use this in a server.", ephemeral=True)
+        return
+    target_channel = channel or interaction.channel
+    if not isinstance(target_channel, discord.TextChannel):
+        await interaction.response.send_message("Cannot post in this channel type.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    async for session in get_async_session():
+        t = await get_tournament(session, tournament_id, interaction.guild_id)
+        if not t:
+            await interaction.followup.send("Tournament not found.", ephemeral=True)
+            return
+        guild, client = interaction.guild, interaction.client
+        embed = await build_roster_embed(session, t, guild, client)
+        try:
+            await target_channel.send(embed=embed)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                f"Missing Access: I can't post in {target_channel.mention}. "
+                "Ensure my role has Send Messages and Embed Links.",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
+            f"Posted roster for **{t.name}** to {target_channel.mention}.",
+            ephemeral=True,
+        )
         return
 
 

@@ -2410,7 +2410,9 @@ function App({ isCurrentPage = false }) {
           ? `${API_GLOBAL}/tournaments/${tournamentId}/bracket/cleanup-messages`
           : type === 'begins'
             ? `${API_GLOBAL}/tournaments/${tournamentId}/bracket/post-tournament-begins`
-            : `${API_GLOBAL}/tournaments/${tournamentId}/bracket/post-${type}`;
+            : type === 'roster'
+              ? `${API_GLOBAL}/tournaments/${tournamentId}/bracket/post-roster`
+              : `${API_GLOBAL}/tournaments/${tournamentId}/bracket/post-${type}`;
       const res = await authFetch(url, {
         method: 'POST',
         headers: type === 'signup' ? { 'Content-Type': 'application/json' } : undefined,
@@ -2422,7 +2424,7 @@ function App({ isCurrentPage = false }) {
         const n = data?.deleted ?? 0;
         setCopyFeedback(`Cleaned up ${n} message(s) from Discord`);
       } else {
-        const label = type === 'signup' ? 'tournament signup' : type === 'begins' ? 'tournament begins' : type;
+        const label = type === 'signup' ? 'tournament signup' : type === 'begins' ? 'tournament begins' : type === 'roster' ? 'roster' : type;
         setCopyFeedback(`Posted ${label} to Discord`);
       }
       setTimeout(() => setCopyFeedback(null), 2000);
@@ -2690,6 +2692,14 @@ function App({ isCurrentPage = false }) {
                               Post signup to Discord
                             </button>
                           )}
+                          <button
+                            disabled={!!postDiscordLoading}
+                            onClick={() => { postToDiscord('roster'); setMenuOpen(false); }}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', marginBottom: 4, opacity: postDiscordLoading ? 0.6 : 1 }}
+                            title="Post full roster of everyone signed up to Discord bracket channel"
+                          >
+                            {postDiscordLoading === 'roster' ? 'Posting…' : 'Post roster'}
+                          </button>
                           <button
                             disabled={!!postDiscordLoading}
                             onClick={() => { postToDiscord('cleanup'); setMenuOpen(false); }}

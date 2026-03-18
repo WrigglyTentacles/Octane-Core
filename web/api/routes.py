@@ -1377,6 +1377,33 @@ async def post_teams_to_discord(tournament_id: int, user: User = Depends(require
         return {"ok": True, "message_id": r.json().get("message_id")}
 
 
+@router.post("/tournaments/{tournament_id}/bracket/post-roster")
+async def post_roster_to_discord(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
+    """Post full roster of everyone signed up to Discord bracket channel."""
+    if not config.INTERNAL_API_SECRET or not config.BOT_INTERNAL_URL:
+        raise HTTPException(503, "Discord integration not configured")
+    async with async_session_factory() as session:
+        t = await session.get(Tournament, tournament_id)
+        if not t:
+            raise HTTPException(404, "Tournament not found")
+        guild_id, channel_id = await _get_discord_bracket_channel(session, t)
+        if not (guild_id and channel_id):
+            raise HTTPException(400, "Discord bracket channel not configured. Set it in Settings.")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"{config.BOT_INTERNAL_URL.rstrip('/')}/internal/post-roster",
+                    json={"tournament_id": tournament_id, "channel_id": channel_id, "guild_id": guild_id},
+                    headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+                )
+        except Exception as e:
+            raise HTTPException(503, f"Could not reach bot: {e}") from e
+        if r.status_code != 200:
+            err = r.json().get("error", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+            raise HTTPException(400, err)
+        return {"ok": True, "message_id": r.json().get("message_id")}
+
+
 @router.post("/tournaments/{tournament_id}/bracket/post-round")
 async def post_round_to_discord(tournament_id: int, user: User = Depends(require_moderator_for_tournament)):
     """Manually post current round lineup embed to Discord bracket channel."""

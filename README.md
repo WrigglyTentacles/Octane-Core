@@ -2,6 +2,11 @@
 
 Discord bot and web app for Rocket League tournaments. Create tournaments, manage signups and teams, generate brackets (single or double elimination), and record results.
 
+## Guides
+
+- **[User Guide](docs/USER_GUIDE.md)** — For players: signing up, viewing brackets, Discord commands
+- **[Moderator Guide](docs/MODERATOR_GUIDE.md)** — For moderators and admins: running tournaments, Discord commands, web UI
+
 ## Features
 
 - **Tournaments** — Create tournaments with configurable format (1v1, 2v2, 3v3), status, and bracket type
