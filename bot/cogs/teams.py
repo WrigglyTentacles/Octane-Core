@@ -87,7 +87,7 @@ async def add(
             return
         p = await get_player(session, player.id)
         if not p:
-            await interaction.followup.send(f"{player.mention} hasn't registered yet. Use `/register` first.", ephemeral=True)
+            await interaction.followup.send(f"{player.mention} hasn't signed up for this tournament yet. Use `/tournament register` or react to the signup post.", ephemeral=True)
             return
         result = await session.execute(
             select(Team).where(

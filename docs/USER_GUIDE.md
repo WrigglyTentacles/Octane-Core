@@ -44,14 +44,8 @@ Shows who you play next.
 ### `/bracket status [tournament_id]`
 Shows your full match status: previous, current, and upcoming matches.
 
-### `/register [epic_username]`
-Links your Discord account to an Epic username (for MMR seeding). Optional for signup.
-
 ### `/profile`
 Shows your profile and MMR if you’ve linked an Epic account.
-
-### `/mmrcheck <epic_username>`
-Looks up MMR for any Epic username (no registration required).
 
 ---
 
@@ -78,7 +72,6 @@ Looks up MMR for any Epic username (no registration required).
 ## Tips
 
 - **Tournament ID**: Shown on signup posts and in `/tournament list`. Use it with `/tournament register` and `/bracket` commands.
-- **MMR**: Linking your Epic account with `/register` helps moderators seed brackets by rank.
 - **Signup deadline**: Check the signup post for the deadline. Signups close after that time.
 - **Tournament begins**: The start time may differ from the signup deadline; both are shown when set.
 

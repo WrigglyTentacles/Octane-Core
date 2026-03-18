@@ -35,7 +35,7 @@ async def get_player(session: AsyncSession, discord_id: int):
     return result.scalar_one_or_none()
 
 
-@app_commands.command(description="Show MMR for a linked user (use /mmrcheck for any Epic username)")
+@app_commands.command(description="Show MMR for a linked user")
 @app_commands.describe(
     user="User to check (must have Epic linked)",
     playlist="Playlist to show MMR for (default: doubles)",
@@ -45,7 +45,7 @@ async def mmr(
     user: Optional[discord.Member] = None,
     playlist: str = "doubles",
 ) -> None:
-    """Show MMR for a user with Epic linked. Use /mmrcheck [username] to look up any Epic username."""
+    """Show MMR for a user with Epic linked."""
     await interaction.response.defer()
 
     target = user or interaction.user
@@ -53,13 +53,13 @@ async def mmr(
         player = await get_player(session, target.id)
         if not player:
             await interaction.followup.send(
-                f"{target.mention} hasn't registered yet." if user else "You haven't registered. Use `/register` first.",
+                f"{target.mention} hasn't signed up for any tournament yet." if user else "You don't have a profile yet. Sign up for a tournament first.",
                 ephemeral=not user,
             )
             return
         if not player.epic_id and not player.epic_username:
             await interaction.followup.send(
-                f"{target.mention} doesn't have Epic linked. Use `/mmrcheck [username]` to look up any player.",
+                f"{target.mention} doesn't have Epic linked.",
                 ephemeral=not user,
             )
             return

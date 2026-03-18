@@ -8,7 +8,7 @@ from discord.ext import commands
 
 import config
 from bot.checks import admin_only, mod_or_higher
-from bot.cogs import registration, mmr, tournaments, teams, brackets, config_cog, webregister
+from bot.cogs import registration, mmr, tournaments, teams, brackets, config_cog, webregister, help_cog
 from bot.listeners import signup
 from bot.models import init_db
 from bot.services.rl_api import RLAPIService
@@ -71,9 +71,7 @@ class OctaneBot(commands.Bot):
         self.rl_service = RLAPIService(config.RLAPI_CLIENT_ID, config.RLAPI_CLIENT_SECRET)
 
         # Add commands
-        self.tree.add_command(registration.register)
         self.tree.add_command(registration.profile)
-        self.tree.add_command(registration.mmrcheck)
         self.tree.add_command(mmr.mmr)
         self.tree.add_command(mmr.leaderboard)
         self.tree.add_command(tournaments.tournament_group)
@@ -83,6 +81,7 @@ class OctaneBot(commands.Bot):
         self.tree.add_command(config_cog.debug_roles)
         self.tree.add_command(config_cog.sync)
         self.tree.add_command(webregister.webregister)
+        self.tree.add_command(help_cog.octane_core_group)
 
         # Sync commands
         await self.tree.sync()

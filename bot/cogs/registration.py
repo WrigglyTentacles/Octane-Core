@@ -1,4 +1,4 @@
-"""Registration cog - /register, /profile. Epic linking is optional (future /link with manual approval)."""
+"""Registration cog - /profile. Epic linking is optional (future /link with manual approval)."""
 from __future__ import annotations
 
 from typing import Optional
@@ -14,7 +14,6 @@ from bot.models.base import get_async_session
 from bot.services.rl_api import RLAPIService
 import config
 
-# rlapi can raise HTTPException (invalid credentials) or KeyError (internal bug on error path)
 RLAPI_ERROR_MSG = "MMR lookup is unavailable. Check RLAPI_CLIENT_ID and RLAPI_CLIENT_SECRET in .env (Epic Developer Portal)."
 
 
@@ -22,33 +21,6 @@ async def get_player(session: AsyncSession, discord_id: int) -> Optional[Player]
     """Get player by Discord ID."""
     result = await session.execute(select(Player).where(Player.discord_id == discord_id))
     return result.scalar_one_or_none()
-
-
-@app_commands.command(description="Register for tournaments (Discord only, no Epic required)")
-async def register(interaction: discord.Interaction) -> None:
-    """Register your Discord account for tournaments. MMR tracking is optional."""
-    await interaction.response.defer(ephemeral=True)
-
-    display_name = interaction.user.display_name or str(interaction.user)
-    async for session in get_async_session():
-        existing = await get_player(session, interaction.user.id)
-        if existing:
-            existing.display_name = display_name
-        else:
-            session.add(
-                Player(
-                    discord_id=interaction.user.id,
-                    display_name=display_name,
-                )
-            )
-        await session.commit()
-        break
-
-    await interaction.followup.send(
-        "You're registered! Use `/tournament register <id>` or react to signup posts to join tournaments. "
-        "MMR lookup is optional — use `/mmrcheck [username]` to look up any Epic username.",
-        ephemeral=True,
-    )
 
 
 @app_commands.command(description="View your profile and MMR (if Epic linked)")
@@ -60,7 +32,7 @@ async def profile(interaction: discord.Interaction) -> None:
         player = await get_player(session, interaction.user.id)
         if not player:
             await interaction.followup.send(
-                "You haven't registered yet. Use `/register` to set up your profile (optional for tournaments).",
+                "You don't have a profile yet. React to a signup post or use `/tournament register` to join a tournament — a profile is created automatically.",
                 ephemeral=True,
             )
             return
@@ -92,56 +64,9 @@ async def profile(interaction: discord.Interaction) -> None:
         else:
             embed.add_field(
                 name="Epic",
-                value="Not linked. Use `/mmrcheck [username]` to look up any player. Linking will be available via `/link` (manual approval).",
+                value="Not linked. Linking will be available via `/link` (manual approval) in a future update.",
                 inline=False,
             )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
-
-
-@app_commands.command(description="Look up MMR for an Epic username (no registration required)")
-@app_commands.describe(username="Epic display name to look up")
-async def mmrcheck(interaction: discord.Interaction, username: str) -> None:
-    """Look up MMR for any Epic username. Does not require registration."""
-    username = username.strip()
-    if not username:
-        await interaction.response.send_message("Please provide an Epic username.", ephemeral=True)
-        return
-
-    await interaction.response.defer()
-
-    rl_service = RLAPIService(config.RLAPI_CLIENT_ID, config.RLAPI_CLIENT_SECRET)
-    try:
-        player_data = await rl_service.get_player_by_epic_name(username)
-    except (Exception, KeyError):
-        await interaction.followup.send(RLAPI_ERROR_MSG, ephemeral=True)
-        return
-    finally:
-        await rl_service.close()
-
-    if not player_data:
-        await interaction.followup.send(
-            f"Could not find player **{username}** on Epic. Check the spelling or try again later.",
-            ephemeral=True,
-        )
-        return
-
-    mmr_info = rl_service.get_playlist_mmr(player_data, "doubles")
-    if not mmr_info:
-        await interaction.followup.send(
-            f"Found **{player_data.user_name or username}** but no Doubles rank data.",
-            ephemeral=True,
-        )
-        return
-
-    skill, rank_str = mmr_info
-    embed = discord.Embed(
-        title=f"MMR — {player_data.user_name or username}",
-        color=discord.Color.green(),
-    )
-    embed.add_field(name="Epic", value=player_data.user_name or username, inline=False)
-    embed.add_field(name="Playlist", value="Doubles", inline=True)
-    embed.add_field(name="Rank", value=rank_str, inline=True)
-    embed.add_field(name="MMR", value=str(skill), inline=True)
-    await interaction.followup.send(embed=embed)
