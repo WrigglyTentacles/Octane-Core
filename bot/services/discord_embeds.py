@@ -9,6 +9,8 @@ from sqlalchemy.orm import selectinload
 
 import discord
 
+from web.api.web_urls import bracket_url
+
 from bot.models import (
     BracketMatch,
     Player,
@@ -428,6 +430,13 @@ async def build_round_lineup_embed(
 
     first_section, first_round = sorted_keys[0]
 
+    guild_id = guild.id if guild is not None else getattr(t, "guild_id", None)
+    bracket_link_line = ""
+    if guild_id:
+        url = bracket_url(guild_id)
+        if url:
+            bracket_link_line = f"\n\n**View bracket:** {url}"
+
     # For double elim: when first unplayed is (losers, 11) and Primary R2 is already done,
     # we already posted Secondary R1 with Primary R2 when R1 completed. Skip to avoid duplicate.
     if (
@@ -479,6 +488,7 @@ async def build_round_lineup_embed(
                 f"**Current round lineup** — teams facing each other this round.\n\n"
                 f"Use `/bracket status` to check your match status.\n"
                 f"Moderators: use `/bracket update` with match ID and winner slot (1 or 2) to record results."
+                f"{bracket_link_line}"
             ),
             color=discord.Color.blue(),
         )

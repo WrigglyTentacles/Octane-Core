@@ -380,6 +380,49 @@ def _match_had_bye(m: BracketMatch) -> bool:
     )
 
 
+def _winner_avoided_opponent(m: BracketMatch, is_team: bool) -> bool:
+    """True if the recorded winner never faced an opponent in this match (R1 bye or structural bye)."""
+    if not _get_winner_entity(m, is_team):
+        return False
+    if _match_had_bye(m):
+        return True
+    has_s1 = bool(m.team1_id or m.player1_id or m.manual_entry1_id)
+    has_s2 = bool(m.team2_id or m.player2_id or m.manual_entry2_id)
+    return not (has_s1 and has_s2)
+
+
+def _winner_parent_slot(m: BracketMatch, is_team: bool) -> int:
+    """Which parent slot (1 or 2) the winner occupies."""
+    if is_team:
+        return 1 if m.winner_team_id == m.team1_id else 2
+    if m.winner_manual_entry_id:
+        return 1 if m.winner_manual_entry_id == m.manual_entry1_id else 2
+    return 1 if m.winner_player_id == m.player1_id else 2
+
+
+async def count_prior_bye_wins_on_path(
+    session: AsyncSession, m: BracketMatch, is_team: bool
+) -> int:
+    """Count how many times this competitor advanced without playing an opponent on the path to this match."""
+    total = 0
+    cur: Optional[BracketMatch] = m
+    while cur is not None:
+        if _winner_avoided_opponent(cur, is_team):
+            total += 1
+        if cur.round_num <= 1:
+            break
+        wslot = _winner_parent_slot(cur, is_team)
+        result = await session.execute(
+            select(BracketMatch).where(
+                BracketMatch.bracket_id == cur.bracket_id,
+                BracketMatch.parent_match_id == cur.id,
+                BracketMatch.parent_match_slot == wslot,
+            )
+        )
+        cur = result.scalar_one_or_none()
+    return total
+
+
 def _get_winner_entity(m: BracketMatch, is_team: bool) -> Optional[Tuple]:
     """Get (entity, is_team) tuple for the match winner, or None."""
     if m.winner_team_id:
@@ -445,8 +488,9 @@ async def advance_round_when_complete(
 ) -> bool:
     """
     When all matches in a round have winners, advance them to the next round.
-    Randomize who gets the bye slot, excluding any team that had a bye in this round.
-    Only runs for single_elim; no-op if round incomplete or no next round.
+    When there is a structural bye, assign it to a path that has had the fewest prior
+    bye advances (opening byes or earlier structural byes); ties are random.
+    Remaining slots are shuffled. Only runs for single_elim; no-op if round incomplete.
     Returns True if the round was advanced, False otherwise.
     """
     result = await session.execute(
@@ -503,28 +547,21 @@ async def advance_round_when_complete(
 
     if bye_slot_idx >= 0:
         bye_slot = all_slots[bye_slot_idx]
-        non_bye_slots = [s for i, s in enumerate(all_slots) if i != bye_slot_idx]
-        bye_winners = [(m, e) for m, e, hb in winners if hb]
-        other_winners = [(m, e) for m, e, hb in winners if not hb]
-        if bye_winners and non_bye_slots:
-            random.shuffle(non_bye_slots)
-            bye_winners[0][0].parent_match_id, bye_winners[0][0].parent_match_slot = non_bye_slots[0]
-            remaining = non_bye_slots[1:] + [bye_slot]
-            random.shuffle(remaining)
-            needed = len(other_winners) + max(0, len(bye_winners) - 1)
-            if len(remaining) < needed:
-                raise ValueError(
-                    f"Bye assignment: need {needed} slots for {len(other_winners)} non-bye + {len(bye_winners)} bye winners, have {len(remaining)}"
-                )
-            for j, (m, _) in enumerate(other_winners):
-                m.parent_match_id, m.parent_match_slot = remaining[j]
-            for j, (m, _) in enumerate(bye_winners[1:], len(other_winners)):
-                m.parent_match_id, m.parent_match_slot = remaining[j]
-        else:
-            random.shuffle(all_slots)
-            for i, winner in enumerate(winners):
-                m = winner[0]
-                m.parent_match_id, m.parent_match_slot = all_slots[i]
+        remaining_slots = [s for i, s in enumerate(all_slots) if i != bye_slot_idx]
+        scores: list[tuple[int, BracketMatch]] = []
+        for m, _, _ in winners:
+            c = await count_prior_bye_wins_on_path(session, m, is_team)
+            scores.append((c, m))
+        min_score = min(s[0] for s in scores)
+        candidates = [m for c, m in scores if c == min_score]
+        chosen = random.choice(candidates)
+        chosen.parent_match_id, chosen.parent_match_slot = bye_slot
+        rest = [w[0] for w in winners if w[0] is not chosen]
+        random.shuffle(remaining_slots)
+        if len(rest) != len(remaining_slots):
+            raise ValueError("Bye assignment: slot count mismatch")
+        for m, slot in zip(rest, remaining_slots):
+            m.parent_match_id, m.parent_match_slot = slot
     else:
         random.shuffle(all_slots)
         for i, winner in enumerate(winners):
@@ -538,32 +575,49 @@ async def advance_round_when_complete(
         other = 2 if pslot == 1 else 1
         structural_bye.add((pid, other))
 
+    # Assign all advancing winners to the next round first. Structural-bye auto-wins
+    # must run only after every slot is filled; otherwise we can recurse into the next
+    # round before sibling matches receive their winners (skipping round posts).
     for winner in winners:
         m, entity = winner[0], winner[1]
         parent = await session.get(BracketMatch, m.parent_match_id)
         if not parent:
             continue
         _assign_entity_to_match(parent, m.parent_match_slot, entity, is_team)
+
+    await session.flush()
+
+    next_result = await session.execute(
+        select(BracketMatch)
+        .where(
+            BracketMatch.bracket_id == bracket_id,
+            BracketMatch.round_num == round_num + 1,
+            BracketMatch.bracket_section.is_(None),
+        )
+        .order_by(BracketMatch.match_num)
+    )
+    next_matches = list(next_result.scalars().all())
+
+    for parent in next_matches:
         has_s1 = bool(parent.team1_id or parent.player1_id or parent.manual_entry1_id)
         has_s2 = bool(parent.team2_id or parent.player2_id or parent.manual_entry2_id)
-        other_slot = 2 if m.parent_match_slot == 1 else 1
-        is_struct_bye = (parent.id, other_slot) in structural_bye
-        if has_s1 and not has_s2 and is_struct_bye:
+        if has_s1 and not has_s2 and (parent.id, 2) in structural_bye:
             if is_team:
                 parent.winner_team_id = parent.team1_id
             elif parent.manual_entry1_id:
                 parent.winner_manual_entry_id = parent.manual_entry1_id
             else:
                 parent.winner_player_id = parent.player1_id
-            await advance_round_when_complete(session, bracket_id, round_num + 1, is_team)
-        elif has_s2 and not has_s1 and is_struct_bye:
+        elif has_s2 and not has_s1 and (parent.id, 1) in structural_bye:
             if is_team:
                 parent.winner_team_id = parent.team2_id
             elif parent.manual_entry2_id:
                 parent.winner_manual_entry_id = parent.manual_entry2_id
             else:
                 parent.winner_player_id = parent.player2_id
-            await advance_round_when_complete(session, bracket_id, round_num + 1, is_team)
+
+    await session.flush()
+    await advance_round_when_complete(session, bracket_id, round_num + 1, is_team)
     return True
 
 
