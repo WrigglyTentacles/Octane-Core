@@ -1616,6 +1616,7 @@ async def update_match(
     from bot.services.bracket_gen import (
         advance_rounds_until_incomplete,
         advance_winner_to_parent,
+        flush_double_elim_after_score_update,
         round_just_completed,
     )
 
@@ -1669,7 +1670,9 @@ async def update_match(
                         session, bracket.id, match.round_num, is_team
                     )
                 elif bracket.bracket_type == "double_elim":
-                    await advance_winner_to_parent(session, match, is_team)
+                    await flush_double_elim_after_score_update(
+                        session, bracket.id, is_team
+                    )
                     round_advanced = await round_just_completed(
                         session,
                         bracket.id,

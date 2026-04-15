@@ -1,4 +1,11 @@
-"""Bracket generation service."""
+"""Bracket generation service.
+
+Double elimination (n >= 8): winners bracket uses the same W1 layout as single
+elim — (n+1)//2 matches with adjacent seeding (2i vs 2i+1). When W1 has an odd
+number of matches, the last W1 match's loser feeds only slot 1 of the last L1
+match; slot 2 is a structural bye resolved at runtime by
+apply_losers_bracket_structural_byes.
+"""
 from __future__ import annotations
 
 import random
@@ -86,6 +93,163 @@ def next_power_of_2(n: int) -> int:
     return p
 
 
+def _double_elim_loser_round_sizes(
+    l_r1_size: int, w_layer_sizes: List[int]
+) -> List[int]:
+    """
+    Losers layer sizes follow L1/L2 = l_r1, then ceil-halving the survivor count.
+    Whenever halving reaches width w and that matches winners layer W_{2+k} (k = shelf
+    index), append a duplicate round of the same width so each match keeps slot 1 for
+    an L child and slot 2 for the matching WB dropout wave.
+    """
+    if l_r1_size < 1:
+        return [1, 1, 1]
+    sizes = [l_r1_size, l_r1_size]
+    n_w = len(w_layer_sizes)
+    p = l_r1_size
+    shelf_round = 0
+    while p > 1:
+        nxt = (p + 1) // 2
+        sizes.append(nxt)
+        w_idx = 2 + shelf_round
+        if w_idx < n_w - 1 and nxt >= 2 and w_layer_sizes[w_idx] == nxt:
+            sizes.append(nxt)
+            shelf_round += 1
+        p = nxt
+    sizes.append(1)  # losers final (W final loser)
+    return sizes
+
+
+def _winners_layer_sizes(w_r1_match_count: int) -> List[int]:
+    out: List[int] = []
+    p = w_r1_match_count
+    while p >= 1:
+        out.append(p)
+        if p == 1:
+            break
+        p = (p + 1) // 2
+    return out
+
+
+def _l_layer_starts(l_round_sizes: List[int]) -> List[int]:
+    starts: List[int] = []
+    acc = 0
+    for sz in l_round_sizes:
+        starts.append(acc)
+        acc += sz
+    return starts
+
+
+def _losers_wb_injection_dest_layers(l_round_sizes: List[int]) -> List[int]:
+    """
+    Indices into l_round_sizes for rounds that receive winners-bracket dropout losers
+    (W3..W_{n-2}). These are the *destination* layers of a parallel shelf edge
+    (same width as previous layer, previous layer was wider — merge-then-WB wave).
+
+    Shelves where width is 1 (e.g. L5→L6 before l_final) are excluded: that edge only
+    forwards L survivors toward l_final; the WB finalist drops via w_final.loser_advances.
+
+    Must match the same prev>cur && next==cur rule used when linking L matches.
+    """
+    out: List[int] = []
+    for layer in range(1, len(l_round_sizes) - 1):
+        cur_sz = l_round_sizes[layer]
+        next_sz = l_round_sizes[layer + 1]
+        prev_sz = l_round_sizes[layer - 1]
+        if (
+            next_sz == cur_sz
+            and prev_sz > cur_sz
+            and cur_sz >= 2
+        ):
+            out.append(layer + 1)
+    return out
+
+
+def _l_match_child_occupies_slot(
+    l_matches: List[BracketMatch],
+    l_starts: List[int],
+    l_round_sizes: List[int],
+    lb_ri: int,
+    k: int,
+    slot: int,
+) -> bool:
+    if lb_ri <= 0:
+        return False
+    lm = l_matches[l_starts[lb_ri] + k]
+    ps = l_starts[lb_ri - 1]
+    ns = l_round_sizes[lb_ri - 1]
+    for i in range(ns):
+        ch = l_matches[ps + i]
+        if ch.parent_match_id == lm.id and ch.parent_match_slot == slot:
+            return True
+    return False
+
+
+def _wire_all_wb_loser_drops(
+    w_matches: List[BracketMatch],
+    l_matches: List[BracketMatch],
+    w_layer_sizes: List[int],
+    l_round_sizes: List[int],
+) -> None:
+    """
+    W1/W2 losers are wired elsewhere. For each winners match in W3..W_{n-2}, assign
+    loser_advances_to_* on the losers *parallel shelf* for that wave only.
+
+    Never scan earlier merge rounds: e.g. for 12 players L3 can have a match with
+    only one L child on slot 1, leaving slot 2 "free" and wrongly stealing a W3
+    loser from the real WB-drop round (L4).
+    """
+    l_starts = _l_layer_starts(l_round_sizes)
+    n_w = len(w_layer_sizes)
+    n_ll = len(l_round_sizes)
+    inject_layers = _losers_wb_injection_dest_layers(l_round_sizes)
+    claimed: set[tuple[int, int]] = set()
+    for wm in w_matches:
+        if wm.loser_advances_to_match_id and wm.loser_advances_to_slot:
+            claimed.add((wm.loser_advances_to_match_id, wm.loser_advances_to_slot))
+
+    num_wb_rounds = max(0, n_w - 3)
+    if num_wb_rounds > len(inject_layers):
+        raise ValueError(
+            f"Double elim: need {num_wb_rounds} WB-drop losers layers "
+            f"but l_round_sizes only has {len(inject_layers)} "
+            f"(l_round_sizes={l_round_sizes})"
+        )
+
+    for w_li in range(2, n_w - 1):
+        w_start = sum(w_layer_sizes[:w_li])
+        n_wm = w_layer_sizes[w_li]
+        lb_target = inject_layers[w_li - 2]
+
+        for j in range(n_wm):
+            w_m = w_matches[w_start + j]
+            placed = False
+            n_l_at = l_round_sizes[lb_target]
+            l_base = l_starts[lb_target]
+            for k in range(n_l_at):
+                lm = l_matches[l_base + k]
+                for slot_try in (2, 1):
+                    if _l_match_child_occupies_slot(
+                        l_matches, l_starts, l_round_sizes, lb_target, k, slot_try
+                    ):
+                        continue
+                    if (lm.id, slot_try) in claimed:
+                        continue
+                    w_m.loser_advances_to_match_id = lm.id
+                    w_m.loser_advances_to_slot = slot_try
+                    claimed.add((lm.id, slot_try))
+                    placed = True
+                    break
+                if placed:
+                    break
+            if not placed:
+                raise ValueError(
+                    f"Double elim: could not place WB layer {w_li} match {j} loser "
+                    f"(lb_target={lb_target}, n_w={n_w}, n_ll={n_ll}, "
+                    f"l_round_sizes={l_round_sizes})"
+                )
+
+
 def preview_bracket_structure(
     names: List[str], bracket_type: str = "single_elim"
 ) -> dict:
@@ -141,33 +305,27 @@ def preview_bracket_structure(
         return {"rounds": {str(k): v for k, v in rounds.items()}, "bracket_type": "round_robin"}
 
     # Double elim preview - fall back to single elim for small brackets (< 8)
-    size = next_power_of_2(n)
-    if size < 8:
+    if n < 8:
         return preview_bracket_structure(names, "single_elim")
 
-    # Double elim preview - same rounds structure as real bracket
-    w_r1_size = size // 2
+    # Double elim preview — mirror _create_double_elim_matches
+    w_r1_match_count = (n + 1) // 2
     rounds = {}
     rounds[1] = []
-    for i in range(w_r1_size):
-        s1 = names[i] if i < n else "TBD"
-        opp = size - 1 - i
-        s2 = names[opp] if opp < n else "TBD"
+    for i in range(w_r1_match_count):
+        s1 = names[2 * i] if 2 * i < n else "TBD"
+        s2 = names[2 * i + 1] if 2 * i + 1 < n else "TBD"
         rounds[1].append(m(s1, s2, 1, i + 1, "winners"))
-    prev_size = w_r1_size
+    prev_size = w_r1_match_count
     r = 2
     while prev_size > 1:
-        curr_size = prev_size // 2
-        rounds[r] = [m("TBD", "TBD", r, i + 1) for i in range(curr_size)]
+        curr_size = (prev_size + 1) // 2
+        rounds[r] = [m("TBD", "TBD", r, i + 1, "winners") for i in range(curr_size)]
         prev_size = curr_size
         r += 1
-    l_r1_size = w_r1_size // 2
-    l_round_sizes = [l_r1_size, l_r1_size]
-    s = l_r1_size // 2
-    while s >= 1:
-        l_round_sizes.append(s)
-        s = s // 2
-    l_round_sizes.append(1)
+    l_r1_size = (w_r1_match_count + 1) // 2
+    w_layers_preview = _winners_layer_sizes(w_r1_match_count)
+    l_round_sizes = _double_elim_loser_round_sizes(l_r1_size, w_layers_preview)
     for lr, l_size in enumerate(l_round_sizes, start=1):
         rnum = 10 + lr
         rounds[rnum] = [m("TBD", "TBD", rnum, i + 1, "losers") for i in range(l_size)]
@@ -450,6 +608,147 @@ def _get_loser_entity(m: BracketMatch, is_team: bool) -> Optional[Tuple]:
     return _get_entity_from_slot(m, loser_slot, is_team)
 
 
+def _entity_key(ent: Optional[Tuple]) -> Optional[Tuple[str, int]]:
+    if not ent:
+        return None
+    if ent[1] is True:
+        return ("team", int(ent[0]))
+    if len(ent) == 3 and ent[2]:
+        return ("manual", int(ent[0][1]))
+    return ("player", int(ent[0]))
+
+
+def _entities_represent_same_competitor(
+    a: Optional[Tuple], b: Optional[Tuple]
+) -> bool:
+    ka, kb = _entity_key(a), _entity_key(b)
+    return ka is not None and ka == kb
+
+
+async def resync_wb_losers_into_losers_bracket(
+    session: AsyncSession, bracket_id: int, is_team: bool
+) -> bool:
+    """Re-apply WB loser_advances_* for decided matches (fixes missed drops / ordering)."""
+    changed = False
+    result = await session.execute(
+        select(BracketMatch).where(
+            BracketMatch.bracket_id == bracket_id,
+            BracketMatch.bracket_section == "winners",
+        )
+    )
+    for wm in result.scalars().all():
+        if not (
+            wm.winner_team_id or wm.winner_player_id or wm.winner_manual_entry_id
+        ):
+            continue
+        if not wm.loser_advances_to_match_id or not wm.loser_advances_to_slot:
+            continue
+        loser_entity = _get_loser_entity(wm, is_team)
+        if not loser_entity:
+            continue
+        lm = await session.get(BracketMatch, wm.loser_advances_to_match_id)
+        if not lm:
+            continue
+        cur = _get_entity_from_slot(lm, wm.loser_advances_to_slot, is_team)
+        if _entities_represent_same_competitor(cur, loser_entity):
+            continue
+        _assign_entity_to_match(lm, wm.loser_advances_to_slot, loser_entity, is_team)
+        changed = True
+    return changed
+
+
+async def propagate_winners_to_parent_chain(
+    session: AsyncSession, bracket_id: int, is_team: bool
+) -> bool:
+    """For every match with a winner and parent, advance if the parent slot is wrong or empty."""
+    changed = False
+    result = await session.execute(
+        select(BracketMatch).where(BracketMatch.bracket_id == bracket_id)
+    )
+    for m in result.scalars().all():
+        if not (
+            m.winner_team_id or m.winner_player_id or m.winner_manual_entry_id
+        ):
+            continue
+        if not m.parent_match_id:
+            continue
+        parent = await session.get(BracketMatch, m.parent_match_id)
+        if not parent:
+            continue
+        entity = (
+            (m.winner_team_id, True) if m.winner_team_id else
+            (("manual", m.winner_manual_entry_id), False, True) if m.winner_manual_entry_id else
+            (m.winner_player_id, False, False)
+        )
+        cur = _get_entity_from_slot(parent, m.parent_match_slot, is_team)
+        if _entities_represent_same_competitor(cur, entity):
+            continue
+        await advance_winner_to_parent(session, m, is_team)
+        changed = True
+    return changed
+
+
+async def _ensure_grand_finals_losers_champion_placed(
+    session: AsyncSession, bracket_id: int, is_team: bool
+) -> bool:
+    """Put the losers-bracket champion on grand finals slot 2 when l_final has a winner.
+
+    Uses the deepest losers match (max round_num) so GF still updates if parent_match_id
+    is missing or points at the wrong match after manual edits or legacy data.
+    """
+    r_gf = await session.execute(
+        select(BracketMatch).where(
+            BracketMatch.bracket_id == bracket_id,
+            BracketMatch.bracket_section == "grand_finals",
+        )
+    )
+    gfs = list(r_gf.scalars().all())
+    if len(gfs) != 1:
+        return False
+    gf = gfs[0]
+    r_lf = await session.execute(
+        select(BracketMatch)
+        .where(
+            BracketMatch.bracket_id == bracket_id,
+            BracketMatch.bracket_section == "losers",
+        )
+        .order_by(BracketMatch.round_num.desc(), BracketMatch.match_num.desc())
+        .limit(1)
+    )
+    l_final = r_lf.scalar_one_or_none()
+    if not l_final:
+        return False
+    win_ent = _get_winner_entity(l_final, is_team)
+    if not win_ent:
+        return False
+    cur = _get_entity_from_slot(gf, 2, is_team)
+    if _entities_represent_same_competitor(cur, win_ent):
+        return False
+    if l_final.parent_match_id == gf.id and l_final.parent_match_slot == 2:
+        await advance_winner_to_parent(session, l_final, is_team)
+    else:
+        _assign_entity_to_match(gf, 2, win_ent, is_team)
+    return True
+
+
+async def flush_double_elim_after_score_update(
+    session: AsyncSession, bracket_id: int, is_team: bool
+) -> None:
+    """Cascade WB losers, parent slots, and structural byes until stable (one API/Discord update)."""
+    for _ in range(64):
+        a = await resync_wb_losers_into_losers_bracket(session, bracket_id, is_team)
+        b = await propagate_winners_to_parent_chain(session, bracket_id, is_team)
+        await session.flush()
+        await apply_double_elim_structural_byes(session, bracket_id, is_team)
+        await session.flush()
+        c = await propagate_winners_to_parent_chain(session, bracket_id, is_team)
+        await session.flush()
+        d = await _ensure_grand_finals_losers_champion_placed(session, bracket_id, is_team)
+        await session.flush()
+        if not (a or b or c or d):
+            break
+
+
 async def advance_winner_to_parent(
     session: AsyncSession, match: BracketMatch, is_team: bool
 ) -> None:
@@ -481,6 +780,141 @@ async def advance_winner_to_parent(
                     loser_match, match.loser_advances_to_slot, loser_entity, is_team
                 )
                 await session.flush()  # Ensure loser assignment is persisted
+
+
+async def apply_winners_bracket_structural_byes(
+    session: AsyncSession, bracket_id: int, is_team: bool
+) -> None:
+    """
+    Compact winners bracket (3→2 matches, etc.) can leave a parent with one feeder;
+    the other slot is a structural bye and must auto-win like single_elim does inside
+    advance_round_when_complete. Double elim does not call that function (it targets
+    bracket_section IS NULL), so we resolve that here.
+
+    Do NOT run this on losers matches: an empty slot there usually waits for a
+    winners-bracket loser via loser_advances_to_match_id, not parent_match_id — the
+    same "incoming child" query would miss that and falsely treat it as a bye.
+    """
+    while True:
+        result = await session.execute(
+            select(BracketMatch).where(
+                BracketMatch.bracket_id == bracket_id,
+                BracketMatch.bracket_section == "winners",
+            )
+        )
+        changed = False
+        for parent in result.scalars().all():
+            if (
+                parent.winner_team_id
+                or parent.winner_player_id
+                or parent.winner_manual_entry_id
+            ):
+                continue
+            e1 = _get_entity_from_slot(parent, 1, is_team)
+            e2 = _get_entity_from_slot(parent, 2, is_team)
+            if e1 and e2:
+                continue
+            if not e1 and not e2:
+                continue
+            empty_slot = 2 if e1 else 1
+            incoming = await session.execute(
+                select(BracketMatch.id)
+                .where(
+                    BracketMatch.bracket_id == bracket_id,
+                    BracketMatch.parent_match_id == parent.id,
+                    BracketMatch.parent_match_slot == empty_slot,
+                )
+                .limit(1)
+            )
+            if incoming.scalar_one_or_none() is not None:
+                continue
+            entity = e1 or e2
+            if not entity:
+                continue
+            _assign_winner_from_entity(parent, entity, is_team)
+            await session.flush()
+            await advance_winner_to_parent(session, parent, is_team)
+            changed = True
+        if not changed:
+            break
+
+
+async def apply_losers_bracket_structural_byes(
+    session: AsyncSession, bracket_id: int, is_team: bool
+) -> None:
+    """
+    Odd W1 → last L1 match can have only one WB loser (slot 1); slot 2 is a bye.
+    Like apply_winners_bracket_structural_byes, empty slots that will never be
+    filled via parent_match_id or loser_advances_to_* must auto-advance.
+    """
+    while True:
+        result = await session.execute(
+            select(BracketMatch).where(
+                BracketMatch.bracket_id == bracket_id,
+                BracketMatch.bracket_section == "losers",
+            )
+        )
+        changed = False
+        for parent in result.scalars().all():
+            if (
+                parent.winner_team_id
+                or parent.winner_player_id
+                or parent.winner_manual_entry_id
+            ):
+                continue
+            e1 = _get_entity_from_slot(parent, 1, is_team)
+            e2 = _get_entity_from_slot(parent, 2, is_team)
+            if e1 and e2:
+                continue
+            if not e1 and not e2:
+                continue
+            empty_slot = 2 if e1 else 1
+            incoming_child = await session.execute(
+                select(BracketMatch.id)
+                .where(
+                    BracketMatch.bracket_id == bracket_id,
+                    BracketMatch.parent_match_id == parent.id,
+                    BracketMatch.parent_match_slot == empty_slot,
+                )
+                .limit(1)
+            )
+            if incoming_child.scalar_one_or_none() is not None:
+                continue
+            # Only wait on WB feeders that are still undecided. Resolved matches with
+            # a bye (no real loser) must not block structural byes on this slot.
+            incoming_wb = await session.execute(
+                select(BracketMatch.id)
+                .where(
+                    BracketMatch.bracket_id == bracket_id,
+                    BracketMatch.loser_advances_to_match_id == parent.id,
+                    BracketMatch.loser_advances_to_slot == empty_slot,
+                    BracketMatch.winner_team_id.is_(None),
+                    BracketMatch.winner_player_id.is_(None),
+                    BracketMatch.winner_manual_entry_id.is_(None),
+                )
+                .limit(1)
+            )
+            if incoming_wb.scalar_one_or_none() is not None:
+                continue
+            entity = e1 or e2
+            if not entity:
+                continue
+            _assign_winner_from_entity(parent, entity, is_team)
+            await session.flush()
+            await advance_winner_to_parent(session, parent, is_team)
+            changed = True
+        if not changed:
+            break
+
+
+async def apply_double_elim_structural_byes(
+    session: AsyncSession, bracket_id: int, is_team: bool
+) -> None:
+    """Run winners and losers structural bye passes; repeat once for cross-effects."""
+    await apply_winners_bracket_structural_byes(session, bracket_id, is_team)
+    await apply_losers_bracket_structural_byes(session, bracket_id, is_team)
+    await apply_winners_bracket_structural_byes(session, bracket_id, is_team)
+    await apply_losers_bracket_structural_byes(session, bracket_id, is_team)
 
 
 async def advance_round_when_complete(
@@ -1049,8 +1483,7 @@ async def _create_double_elim_matches(
 ) -> Optional[Bracket]:
     """Create double-elimination bracket: winners, losers, grand finals."""
     n = len(seeded)
-    size = next_power_of_2(n)
-    if size < 8:
+    if n < 8:
         return await _create_single_elim_matches(
             session, tournament_id, seeded, is_team
         )
@@ -1059,34 +1492,38 @@ async def _create_double_elim_matches(
     session.add(bracket)
     await session.flush()
 
-    # Winners bracket: round 1 (double elim requires power-of-2 structure)
-    size = next_power_of_2(n)
-    w_r1_size = size // 2
     matches: List[BracketMatch] = []
     match_num = 1
+    w_r1_match_count = (n + 1) // 2
+    w_layer_sizes = _winners_layer_sizes(w_r1_match_count)
 
-    # Winners R1 - standard seeding: 1vs8, 2vs7, 3vs6, 4vs5
-    for i in range(w_r1_size):
-        high = seeded[i] if i < n else None
-        low = seeded[size - 1 - i] if (size - 1 - i) < n else None
+    # Winners R1 — adjacent pairing (same as single elim R1)
+    for i in range(w_r1_match_count):
+        slot1 = seeded[2 * i] if 2 * i < n else None
+        slot2 = seeded[2 * i + 1] if 2 * i + 1 < n else None
         m = BracketMatch(
             bracket_id=bracket.id,
             round_num=1,
             match_num=match_num,
             bracket_section="winners",
         )
-        _assign_entity_to_match(m, 1, high, is_team)
-        _assign_entity_to_match(m, 2, low, is_team)
+        _assign_entity_to_match(m, 1, slot1, is_team)
+        _assign_entity_to_match(m, 2, slot2, is_team)
+        if slot2 is None and slot1 is not None:
+            if is_team:
+                m.winner_team_id = slot1[0]
+            else:
+                if slot1[2]:
+                    m.winner_manual_entry_id = slot1[0][1]
+                else:
+                    m.winner_player_id = slot1[0]
         session.add(m)
         matches.append(m)
         match_num += 1
 
-    # Winners R2, R3, ... up to final
     w_round = 2
-    prev_round_size = w_r1_size
-    while prev_round_size > 1:
-        curr_size = prev_round_size // 2
-        for _ in range(curr_size):
+    for layer_sz in w_layer_sizes[1:]:
+        for _ in range(layer_sz):
             m = BracketMatch(
                 bracket_id=bracket.id,
                 round_num=w_round,
@@ -1096,18 +1533,11 @@ async def _create_double_elim_matches(
             session.add(m)
             matches.append(m)
             match_num += 1
-        prev_round_size = curr_size
         w_round += 1
 
-    # Losers bracket: L1 = W1 losers pair off, L2 = L1 winners vs W2 losers (same size)
-    # Then L3, L4... halve until losers final (L winner vs W final loser)
-    l_r1_size = w_r1_size // 2
-    l_round_sizes = [l_r1_size, l_r1_size]
-    s = l_r1_size // 2
-    while s >= 1:
-        l_round_sizes.append(s)
-        s = s // 2
-    l_round_sizes.append(1)  # Losers final
+    # Losers bracket: L1 = ceil(W1/2) matches (W1 losers pair; odd W1 leaves one L1 bye path)
+    l_r1_size = (w_r1_match_count + 1) // 2
+    l_round_sizes = _double_elim_loser_round_sizes(l_r1_size, w_layer_sizes)
     for l_round, l_size in enumerate(l_round_sizes, start=1):
         for _ in range(l_size):
             m = BracketMatch(
@@ -1138,27 +1568,32 @@ async def _create_double_elim_matches(
     w_final = w_matches[-1]
     l_final = l_matches[-1]
 
-    # Winners bracket: link each round to next
+    # Winners bracket: link each round to next (ceil-halving tree)
     idx = 0
-    r_size = w_r1_size
-    while idx + r_size < len(w_matches):
-        for i in range(r_size):
+    for layer_idx in range(len(w_layer_sizes) - 1):
+        r_sz = w_layer_sizes[layer_idx]
+        for i in range(r_sz):
             m = w_matches[idx + i]
-            next_m = w_matches[idx + r_size + (i // 2)]
+            next_m = w_matches[idx + r_sz + (i // 2)]
             m.parent_match_id = next_m.id
             m.parent_match_slot = (i % 2) + 1
-        idx += r_size
-        r_size //= 2
+        idx += r_sz
 
-    # W R1 losers -> L R1 (pair off: M0,M1 losers -> L0; M2,M3 losers -> L1)
-    for i in range(l_r1_size):
+    # W R1 losers -> L R1 (pairs of W1 games); odd W1: last game loser -> L1[last] slot 1 only
+    pairs = w_r1_match_count // 2
+    for i in range(pairs):
         w_matches[i * 2].loser_advances_to_match_id = l_matches[i].id
         w_matches[i * 2].loser_advances_to_slot = 1
         w_matches[i * 2 + 1].loser_advances_to_match_id = l_matches[i].id
         w_matches[i * 2 + 1].loser_advances_to_slot = 2
+    if w_r1_match_count % 2 == 1:
+        w_matches[w_r1_match_count - 1].loser_advances_to_match_id = l_matches[
+            l_r1_size - 1
+        ].id
+        w_matches[w_r1_match_count - 1].loser_advances_to_slot = 1
 
     # W R2 losers -> L R2 slot 2; L R1 winners -> L R2 slot 1
-    w_r2_start = w_r1_size
+    w_r2_start = w_r1_match_count
     l_r2_start = l_r1_size
     for i in range(l_r1_size):
         w_m = w_matches[w_r2_start + i]
@@ -1168,17 +1603,31 @@ async def _create_double_elim_matches(
         l_matches[i].parent_match_id = l_m.id
         l_matches[i].parent_match_slot = 1
 
-    # L bracket internal: L2 winners -> L3, L3 winners -> L4, etc. (up to losers final)
-    l_idx = l_r2_start
-    l_r_size = l_r1_size
-    while l_idx + l_r_size < len(l_matches) and l_r_size >= 1:
-        for i in range(l_r_size):
-            l_m = l_matches[l_idx + i]
-            next_l = l_matches[l_idx + l_r_size + (i // 2)]
-            l_m.parent_match_id = next_l.id
-            l_m.parent_match_slot = (i % 2) + 1
-        l_idx += l_r_size
-        l_r_size //= 2
+    # L bracket internal: L2 -> L3 -> … using layer sizes (ceil-halving rounds).
+    l_starts = _l_layer_starts(l_round_sizes)
+    for layer in range(1, len(l_round_sizes) - 1):
+        cur_sz = l_round_sizes[layer]
+        next_sz = l_round_sizes[layer + 1]
+        prev_sz = l_round_sizes[layer - 1]
+        next_start = l_starts[layer + 1]
+        cur_start = l_starts[layer]
+        # Parallel (WB-drop) round only immediately after a merge-down (prev wider than cur).
+        # If prev == cur == next, two same-width layers in a row must merge into one row of
+        # matches, not another parallel split — otherwise half the bracket never feeds forward.
+        if next_sz == cur_sz and prev_sz > cur_sz:
+            for i in range(cur_sz):
+                l_m = l_matches[cur_start + i]
+                next_l = l_matches[next_start + i]
+                l_m.parent_match_id = next_l.id
+                l_m.parent_match_slot = 1
+        else:
+            for i in range(cur_sz):
+                l_m = l_matches[cur_start + i]
+                next_l = l_matches[next_start + (i // 2)]
+                l_m.parent_match_id = next_l.id
+                l_m.parent_match_slot = (i % 2) + 1
+
+    _wire_all_wb_loser_drops(w_matches, l_matches, w_layer_sizes, l_round_sizes)
 
     # W final loser -> L final slot 2; L final winner -> GF slot 2
     w_final.loser_advances_to_match_id = l_final.id

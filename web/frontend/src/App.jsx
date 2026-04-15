@@ -1056,7 +1056,7 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, showChampion = true, 
   );
 }
 
-function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, roundFilter, roundDisplayOffset = 0 }) {
+function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, roundFilter, roundDisplayOffset = 0, roundFooterLabel = 'Round' }) {
   const filter = roundFilter ?? ((k) => Number(k) < 10);
   const roundEntries = Object.entries(rounds || {}).filter(([k]) => filter(k)).sort((a, b) => Number(a[0]) - Number(b[0]));
   if (roundEntries.length === 0) return <p style={{ color: 'var(--text-muted)', padding: 24 }}>No matches to display.</p>;
@@ -1210,7 +1210,7 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
       <div style={{ display: 'flex', gap: 24, marginTop: 12, fontSize: 12, color: 'var(--text-muted)' }}>
         {roundEntries.map(([r], i) => (
           <span key={r}>
-            Round {Number(r) + roundDisplayOffset}{i < roundEntries.length - 1 ? ' →' : ''}
+            {roundFooterLabel} {Number(r) + roundDisplayOffset}{i < roundEntries.length - 1 ? ' →' : ''}
           </span>
         ))}
       </div>
@@ -1220,7 +1220,7 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
 
 /** Infer winner from advancement or bye: (1) if a team was dragged to the next round, they won;
  * (2) if one slot is BYE, the team in the other slot wins by default. */
-function enrichRoundsWithInferredWinners(rounds) {
+function enrichRoundsWithInferredWinners(rounds, bracketType) {
   if (!rounds || typeof rounds !== 'object') return rounds;
   const allMatches = Object.values(rounds).flat();
   const byId = Object.fromEntries(allMatches.map((m) => [m.id, m]));
@@ -1233,16 +1233,25 @@ function enrichRoundsWithInferredWinners(rounds) {
       const slot1Filled = !!(copy.team1_id || copy.manual_entry1_id || copy.player1_id);
       const slot2Filled = !!(copy.team2_id || copy.manual_entry2_id || copy.player2_id);
       const hasBye = (slot1Filled && !slot2Filled) || (slot2Filled && !slot1Filled);
-      // Grand finals with one slot empty is waiting for losers bracket, NOT a bye — do not infer winner
+      // Grand finals: one empty slot may be waiting for the losers bracket — not a bye.
+      // Losers bracket: one empty slot is usually waiting for a winners-bracket result — not a bye.
       const isGfWaiting = copy.bracket_section === 'grand_finals' && hasBye;
-      if (!copy.winner_name && hasBye && !isGfWaiting) {
+      const isLosersBracketWaiting = copy.bracket_section === 'losers' && hasBye;
+      if (!copy.winner_name && hasBye && !isGfWaiting && !isLosersBracketWaiting) {
         const teamName = s1 === 'BYE' ? s2 : s1;
         if (teamName && teamName !== 'TBD') {
           copy.winner_name = teamName;
           copy.inferred_winner = true;
         }
       }
-      if (!copy.winner_name && copy.parent_match_id) {
+      // Double elim: never infer a match winner from the parent's slot. Losers parents
+      // often get one slot from a WB dropout and one from an L child — reading the
+      // parent's team names would falsely mark the child as "won by" the dropout.
+      if (
+        bracketType !== 'double_elim' &&
+        !copy.winner_name &&
+        copy.parent_match_id
+      ) {
         const parent = byId[copy.parent_match_id];
         if (parent) {
           const slot = copy.parent_match_slot;
@@ -1556,7 +1565,7 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
   const teamsToUse = (bracket?.teams && bracket.teams.length > 0) ? bracket.teams : (teams || []);
 
   const rawRounds = bracket?.rounds || {};
-  const rounds = enrichRoundsWithInferredWinners(rawRounds);
+  const rounds = enrichRoundsWithInferredWinners(rawRounds, bracket?.bracket_type);
   const allMatches = Object.values(rounds).flat();
   const isDoubleElim = bracket?.bracket_type === 'double_elim';
   const isRoundRobin = bracket?.bracket_type === 'round_robin';
@@ -1696,11 +1705,11 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
         <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
           <div>
             <h3 style={{ margin: '0 0 16px', color: 'var(--accent)', fontSize: 16 }}>Winners Bracket</h3>
-            <BracketTree rounds={Object.fromEntries(Object.entries(wByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
+            <BracketTree rounds={Object.fromEntries(Object.entries(wByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFooterLabel="Primary" onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 24 }}>
             <h3 style={{ margin: '0 0 16px', color: 'var(--accent)', fontSize: 16 }}>Losers Bracket</h3>
-            <BracketTree rounds={Object.fromEntries(Object.entries(lByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFilter={() => true} roundDisplayOffset={-10} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
+            <BracketTree rounds={Object.fromEntries(Object.entries(lByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFilter={() => true} roundDisplayOffset={-10} roundFooterLabel="Losers" onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
           </div>
           {bySection.grand_finals.length > 0 && (
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 24 }}>

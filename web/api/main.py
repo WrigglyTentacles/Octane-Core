@@ -156,15 +156,32 @@ async def get_bracket(
                 entry = await session.get(TournamentManualEntry, m.manual_entry2_id)
                 if entry:
                     match_data["player2_name"] = entry.display_name
-            # Empty slot with filled slot = bye (opponent advances). Exception: grand_finals in double_elim
-            # — empty slot 2 is waiting for losers bracket, not a bye.
+            # Empty slot with filled slot = bye (opponent advances). In double elim, exceptions:
+            # — grand_finals: empty slot 2 is waiting for losers bracket winner, not a bye.
+            # — losers: one slot is often still waiting for a winners-bracket dropout, not a bye.
+            slot1_filled = bool(
+                m.team1_id or m.player1_id or m.manual_entry1_id
+            )
+            slot2_filled = bool(
+                m.team2_id or m.player2_id or m.manual_entry2_id
+            )
             is_gf_waiting = (
                 bracket.bracket_type == "double_elim"
                 and m.bracket_section == "grand_finals"
-                and not (m.team2_id or m.player2_id or m.manual_entry2_id)
-                and (m.team1_id or m.player1_id or m.manual_entry1_id)
+                and not slot2_filled
+                and slot1_filled
             )
-            if not (m.team2_id or m.player2_id or m.manual_entry2_id) and (m.team1_id or m.player1_id or m.manual_entry1_id) and not is_gf_waiting:
+            is_losers_bracket_waiting = (
+                bracket.bracket_type == "double_elim"
+                and m.bracket_section == "losers"
+                and slot1_filled != slot2_filled
+            )
+            if (
+                not (m.team2_id or m.player2_id or m.manual_entry2_id)
+                and (m.team1_id or m.player1_id or m.manual_entry1_id)
+                and not is_gf_waiting
+                and not is_losers_bracket_waiting
+            ):
                 match_data["team2_name" if is_team else "player2_name"] = "BYE"
             if m.winner_team_id:
                 team = await session.get(Team, m.winner_team_id)

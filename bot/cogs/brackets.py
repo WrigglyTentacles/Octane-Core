@@ -11,7 +11,12 @@ from discord import app_commands
 from bot.checks import mod_or_higher
 from bot.models import Bracket, BracketMatch, Player, Registration, Team, TeamManualMember, Tournament, TournamentManualEntry
 from bot.models.base import get_async_session
-from bot.services.bracket_gen import advance_rounds_until_incomplete, advance_winner_to_parent, create_single_elim_bracket
+from bot.services.bracket_gen import (
+    advance_rounds_until_incomplete,
+    advance_winner_to_parent,
+    create_single_elim_bracket,
+    flush_double_elim_after_score_update,
+)
 from bot.services.discord_embeds import (
     build_results_embed,
     build_round_lineup_embed,
@@ -764,7 +769,12 @@ async def update(
         if bracket.bracket_type == "single_elim":
             await advance_rounds_until_incomplete(session, bracket.id, match.round_num, is_team)
         else:
-            await advance_winner_to_parent(session, match, is_team)
+            if bracket.bracket_type == "double_elim":
+                await flush_double_elim_after_score_update(
+                    session, bracket.id, is_team
+                )
+            else:
+                await advance_winner_to_parent(session, match, is_team)
         # Auto-complete tournament when champion is declared
         champ_result = await session.execute(
             select(BracketMatch)
