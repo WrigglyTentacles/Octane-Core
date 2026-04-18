@@ -859,7 +859,7 @@ function SubstituteForm({ teams, standby, onSubstitute }) {
   );
 }
 
-function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPreview, onDrop, onSwapSlots, matchId, slot, onAdvanceOpponent, onSetWinner, hasOpponent, canSetWinner, canEdit, hasBye }) {
+function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPreview, onDrop, onSwapSlots, matchId, slot, onAdvanceOpponent, onSetWinner, hasOpponent, canSetWinner, canEdit, hasBye, feederChipLabels, feederChipTitle, wbDropChipLabels, wbDropChipTitle }) {
   const content = isTeam && teams?.length ? (
     <TeamSlot name={name} teamId={teamId} teams={teams} isTeam={true} />
   ) : (
@@ -901,7 +901,9 @@ function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPrevi
   if (isPreview || !onDrop) {
     return (
       <div style={boxStyle} title={typeof name === 'string' ? name : undefined}>
-        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{content}</div>
+        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{content}</div>
+        <FeederChips labels={feederChipLabels} title={feederChipTitle} />
+        <WbDropChips labels={wbDropChipLabels} title={wbDropChipTitle} />
       </div>
     );
   }
@@ -950,6 +952,8 @@ function BracketBox({ name, isWinner, accentSide, teams, teamId, isTeam, isPrevi
         </div>
       )}
       <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{content}</div>
+      <FeederChips labels={feederChipLabels} title={feederChipTitle} />
+      <WbDropChips labels={wbDropChipLabels} title={wbDropChipTitle} />
       {showWinnerBtn && (
         <button onClick={(ev) => { ev.stopPropagation(); handleWinnerClick(); }} style={{ marginLeft: 8, fontSize: 10, padding: '2px 6px', flexShrink: 0 }} title={canClickWinner ? 'Set as winner' : 'Advance winner'}>✓</button>
       )}
@@ -1028,9 +1032,6 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, showChampion = true, 
             </div>
           )
         )}
-        {canSetWinner && onSetWinner && (
-          <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>Click team to set winner</div>
-        )}
       </div>
     );
   };
@@ -1056,7 +1057,181 @@ function BracketVisual({ rounds, isTeam, teams, isPreview, showChampion = true, 
   );
 }
 
-function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, roundFilter, roundDisplayOffset = 0, roundFooterLabel = 'Round' }) {
+/** Resolve match from id (API may use number or string for large ids). */
+function resolveMatchById(matchById, id) {
+  if (id == null) return null;
+  return matchById[id] ?? matchById[String(id)] ?? null;
+}
+
+/** Build matchById and parent-slot → feeder matches for advancement chips (double elim). */
+function buildAdvancementMaps(allMatches) {
+  const matchById = {};
+  for (const m of allMatches || []) {
+    matchById[m.id] = m;
+    matchById[String(m.id)] = m;
+  }
+  const incomingByParentSlot = {};
+  for (const m of allMatches || []) {
+    if (m.parent_match_id == null || m.parent_match_slot == null) continue;
+    const k = `${m.parent_match_id}:${m.parent_match_slot}`;
+    if (!incomingByParentSlot[k]) incomingByParentSlot[k] = [];
+    incomingByParentSlot[k].push(m);
+  }
+  const wbDropByLosersSlot = {};
+  for (const m of allMatches || []) {
+    if ((m.bracket_section || 'winners') !== 'winners') continue;
+    if (m.loser_advances_to_match_id == null || m.loser_advances_to_slot == null) continue;
+    const k = `${m.loser_advances_to_match_id}:${m.loser_advances_to_slot}`;
+    if (!wbDropByLosersSlot[k]) wbDropByLosersSlot[k] = [];
+    wbDropByLosersSlot[k].push(m);
+  }
+  return { matchById, incomingByParentSlot, wbDropByLosersSlot };
+}
+
+/** Parent-link feeders only (same-bracket children); WB drops use wbDropByLosersSlot separately. */
+function filterFeedersForDisplay(destMatch, feeders) {
+  if (!feeders?.length) return [];
+  const sec = destMatch.bracket_section || 'winners';
+  if (sec === 'grand_finals') return [...feeders];
+  if (sec === 'winners') {
+    return feeders.filter((f) => (f.bracket_section || 'winners') === 'winners');
+  }
+  if (sec === 'losers') {
+    return feeders.filter((f) => f.bracket_section === 'losers');
+  }
+  return [...feeders];
+}
+
+function getSlotFeederLabels(destMatch, slot, incomingByParentSlot) {
+  const key = `${destMatch.id}:${slot}`;
+  const feeders = incomingByParentSlot[key] || [];
+  const filtered = filterFeedersForDisplay(destMatch, feeders);
+  return filtered
+    .map((f) => `M${f.match_num}`)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+function getSlotFeederTitle(destMatch, slot, incomingByParentSlot) {
+  const labels = getSlotFeederLabels(destMatch, slot, incomingByParentSlot);
+  if (!labels.length) return null;
+  return `Winner from ${labels.join(', ')} advances to this slot`;
+}
+
+function getSlotWbDropLabels(destMatch, slot, wbDropByLosersSlot) {
+  if (destMatch.bracket_section !== 'losers') return [];
+  const key = `${destMatch.id}:${slot}`;
+  const feeders = wbDropByLosersSlot[key] || [];
+  return feeders
+    .map((f) => `M${f.match_num}`)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+function getSlotWbDropTitle(destMatch, slot, wbDropByLosersSlot) {
+  const labels = getSlotWbDropLabels(destMatch, slot, wbDropByLosersSlot);
+  if (!labels.length) return null;
+  return `Winners bracket loser from ${labels.join(', ')} is placed here when that match is decided`;
+}
+
+/** Winners bracket only: where the loser is sent in the secondary (losers) bracket. */
+function formatLoserDropsTo(m, matchById) {
+  if ((m.bracket_section || 'winners') !== 'winners') return null;
+  if (m.loser_advances_to_match_id == null || m.loser_advances_to_slot == null) return null;
+  const target = resolveMatchById(matchById, m.loser_advances_to_match_id);
+  if (!target) return null;
+  const slot = m.loser_advances_to_slot;
+  const slotLabel = slot === 1 ? 'top slot' : 'bottom slot';
+  return `Loser drops to Secondary M${target.match_num} · ${slotLabel}`;
+}
+
+function loserDropsToTitle(m, matchById) {
+  const line = formatLoserDropsTo(m, matchById);
+  if (!line) return undefined;
+  const target = resolveMatchById(matchById, m.loser_advances_to_match_id);
+  if (!target) return line;
+  return `${line} Losers bracket match M${target.match_num}.`;
+}
+
+/** One-line structural hint: where this match's winner goes (parent link only). */
+function formatWinnerAdvancesTo(m, matchById) {
+  if (m.parent_match_id == null || m.parent_match_slot == null) return null;
+  const parent = resolveMatchById(matchById, m.parent_match_id);
+  if (!parent) return null;
+  const slot = m.parent_match_slot;
+  const slotLabel = slot === 1 ? 'top slot' : 'bottom slot';
+  if (parent.bracket_section === 'grand_finals') {
+    const side = slot === 1 ? 'primary side (winners bracket finalist)' : 'secondary side (losers bracket finalist)';
+    return `Winner advances to Grand finals · ${side}`;
+  }
+  return `Winner advances to M${parent.match_num} · ${slotLabel}`;
+}
+
+function advancementLineTitle(m, matchById) {
+  const line = formatWinnerAdvancesTo(m, matchById);
+  if (!line) return undefined;
+  const parent = resolveMatchById(matchById, m.parent_match_id);
+  if (!parent) return line;
+  if (parent.bracket_section === 'grand_finals') {
+    return `${line}. Grand finals match M${parent.match_num}.`;
+  }
+  return `${line}. Next match is in the same bracket section unless noted.`;
+}
+
+function FeederChips({ labels, title }) {
+  if (!labels?.length) return null;
+  return (
+    <span
+      style={{ display: 'inline-flex', gap: 4, flexShrink: 0, marginLeft: 6, alignItems: 'center', flexWrap: 'wrap' }}
+      title={title || undefined}
+    >
+      {labels.map((lab) => (
+        <span
+          key={lab}
+          style={{
+            fontSize: 10,
+            padding: '2px 5px',
+            borderRadius: 4,
+            border: '1px solid var(--border)',
+            color: 'var(--text-muted)',
+            background: 'var(--bg-secondary)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          ← {lab}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** Chips for winners-bracket losers dropping into this secondary-bracket slot. */
+function WbDropChips({ labels, title }) {
+  if (!labels?.length) return null;
+  return (
+    <span
+      style={{ display: 'inline-flex', gap: 4, flexShrink: 0, marginLeft: 4, alignItems: 'center', flexWrap: 'wrap' }}
+      title={title || undefined}
+    >
+      {labels.map((lab) => (
+        <span
+          key={lab}
+          style={{
+            fontSize: 10,
+            padding: '2px 5px',
+            borderRadius: 4,
+            border: '1px solid var(--accent)',
+            color: 'var(--accent)',
+            background: 'var(--accent-muted)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          WB ↓ {lab}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, roundFilter, roundDisplayOffset = 0, roundFooterLabel = 'Round', matchById = {}, incomingByParentSlot = {}, wbDropByLosersSlot = {} }) {
   const filter = roundFilter ?? ((k) => Number(k) < 10);
   const roundEntries = Object.entries(rounds || {}).filter(([k]) => filter(k)).sort((a, b) => Number(a[0]) - Number(b[0]));
   if (roundEntries.length === 0) return <p style={{ color: 'var(--text-muted)', padding: 24 }}>No matches to display.</p>;
@@ -1076,15 +1251,22 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
         color: s && s !== 'TBD' ? 'var(--text-primary)' : 'var(--text-muted)',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'center',
+        justifyContent: 'space-between',
+        gap: 6,
         minHeight: 36,
       }}
     >
-      {isTeam && teams?.length ? (
-        <TeamSlot name={s} teamId={teamId} teams={teams} isTeam={true} />
-      ) : (
-        <span>{s || 'TBD'}</span>
-      )}
+      <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+        {isTeam && teams?.length ? (
+          <TeamSlot name={s} teamId={teamId} teams={teams} isTeam={true} />
+        ) : (
+          <span>{s || 'TBD'}</span>
+        )}
+      </div>
+      <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 0, justifyContent: 'flex-end' }}>
+        <FeederChips labels={getSlotFeederLabels(m, slot, incomingByParentSlot)} title={getSlotFeederTitle(m, slot, incomingByParentSlot)} />
+        <WbDropChips labels={getSlotWbDropLabels(m, slot, wbDropByLosersSlot)} title={getSlotWbDropTitle(m, slot, wbDropByLosersSlot)} />
+      </span>
     </div>
   );
 
@@ -1099,6 +1281,18 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
     const w1 = m.winner_name === s1;
     const w2 = m.winner_name === s2;
     const isEditable = !isPreview && onUpdateMatch;
+    const advLine = formatWinnerAdvancesTo(m, matchById);
+    const advTitle = advancementLineTitle(m, matchById);
+    const dropLine = formatLoserDropsTo(m, matchById);
+    const dropTitle = loserDropsToTitle(m, matchById);
+    const chip1 = getSlotFeederLabels(m, 1, incomingByParentSlot);
+    const chip2 = getSlotFeederLabels(m, 2, incomingByParentSlot);
+    const chipTitle1 = getSlotFeederTitle(m, 1, incomingByParentSlot);
+    const chipTitle2 = getSlotFeederTitle(m, 2, incomingByParentSlot);
+    const wb1 = getSlotWbDropLabels(m, 1, wbDropByLosersSlot);
+    const wb2 = getSlotWbDropLabels(m, 2, wbDropByLosersSlot);
+    const wbTitle1 = getSlotWbDropTitle(m, 1, wbDropByLosersSlot);
+    const wbTitle2 = getSlotWbDropTitle(m, 2, wbDropByLosersSlot);
     return (
       <div
         key={m.id}
@@ -1125,9 +1319,9 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
           >
           {isEditable ? (
             <>
-              <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teams} teamId={m.team1_id} isTeam={isTeam} isPreview={false} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={1} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} hasBye={hasBye} />
+              <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teams} teamId={m.team1_id} isTeam={isTeam} isPreview={false} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={1} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team2_id || m.manual_entry2_id || m.player2_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} hasBye={hasBye} feederChipLabels={chip1} feederChipTitle={chipTitle1} wbDropChipLabels={wb1} wbDropChipTitle={wbTitle1} />
               <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
-              <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teams} teamId={m.team2_id} isTeam={isTeam} isPreview={false} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={2} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} hasBye={hasBye} />
+              <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teams} teamId={m.team2_id} isTeam={isTeam} isPreview={false} onDrop={onUpdateMatch} onSwapSlots={onSwapSlots} matchId={m.id} slot={2} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} hasOpponent={!!(m.team1_id || m.manual_entry1_id || m.player1_id)} canSetWinner={canSetWinner} canEdit={!!onUpdateMatch} hasBye={hasBye} feederChipLabels={chip2} feederChipTitle={chipTitle2} wbDropChipLabels={wb2} wbDropChipTitle={wbTitle2} />
             </>
           ) : (
             <>
@@ -1135,6 +1329,16 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
               <span style={{ display: 'block', textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, margin: '4px 0' }}>vs</span>
               {renderSlot(m, 2, s2, m.team2_id)}
             </>
+          )}
+          {advLine && (
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.35, marginTop: 2 }} title={advTitle}>
+              {advLine}
+            </div>
+          )}
+          {dropLine && (
+            <div style={{ fontSize: 10, color: 'var(--accent)', lineHeight: 1.35, marginTop: 2 }} title={dropTitle}>
+              {dropLine}
+            </div>
           )}
           {m.winner_name && (
             <div className="winners-zone" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -1157,9 +1361,6 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
                 </button>
               )}
             </div>
-          )}
-          {canSetWinner && onSetWinner && (
-            <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>Click team to set winner</div>
           )}
           </div>
         </div>
@@ -1569,6 +1770,9 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
   const allMatches = Object.values(rounds).flat();
   const isDoubleElim = bracket?.bracket_type === 'double_elim';
   const isRoundRobin = bracket?.bracket_type === 'round_robin';
+  const { matchById, incomingByParentSlot, wbDropByLosersSlot } = isDoubleElim
+    ? buildAdvancementMaps(allMatches)
+    : { matchById: {}, incomingByParentSlot: {}, wbDropByLosersSlot: {} };
 
   const bySection = isDoubleElim
     ? {
@@ -1597,6 +1801,18 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
           const canSetWinner = bothFilled && !m.winner_name && !hasBye;
           const w1 = m.winner_name === s1;
           const w2 = m.winner_name === s2;
+          const roundChip1 = isDoubleElim ? getSlotFeederLabels(m, 1, incomingByParentSlot) : [];
+          const roundChip2 = isDoubleElim ? getSlotFeederLabels(m, 2, incomingByParentSlot) : [];
+          const roundChipTitle1 = isDoubleElim ? getSlotFeederTitle(m, 1, incomingByParentSlot) : null;
+          const roundChipTitle2 = isDoubleElim ? getSlotFeederTitle(m, 2, incomingByParentSlot) : null;
+          const roundWb1 = isDoubleElim ? getSlotWbDropLabels(m, 1, wbDropByLosersSlot) : [];
+          const roundWb2 = isDoubleElim ? getSlotWbDropLabels(m, 2, wbDropByLosersSlot) : [];
+          const roundWbTitle1 = isDoubleElim ? getSlotWbDropTitle(m, 1, wbDropByLosersSlot) : null;
+          const roundWbTitle2 = isDoubleElim ? getSlotWbDropTitle(m, 2, wbDropByLosersSlot) : null;
+          const roundAdvLine = isDoubleElim ? formatWinnerAdvancesTo(m, matchById) : null;
+          const roundAdvTitle = isDoubleElim ? advancementLineTitle(m, matchById) : undefined;
+          const roundDropLine = isDoubleElim ? formatLoserDropsTo(m, matchById) : null;
+          const roundDropTitle = isDoubleElim ? loserDropsToTitle(m, matchById) : undefined;
           return (
             <div key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
               <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 24, paddingTop: 16 }}>M{m.match_num}</span>
@@ -1604,20 +1820,46 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {isPreview ? (
                   <>
-                    <div style={{ padding: 14, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', color: s1 && s1 !== 'TBD' ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                      {isTeam && teamsToUse?.length ? <TeamSlot name={s1} teamId={m.team1_id} teams={teamsToUse} isTeam={true} /> : (s1 || 'Slot 1')}
+                    <div style={{ padding: 14, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', color: s1 && s1 !== 'TBD' ? 'var(--text-primary)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        {isTeam && teamsToUse?.length ? <TeamSlot name={s1} teamId={m.team1_id} teams={teamsToUse} isTeam={true} /> : (s1 || 'Slot 1')}
+                      </div>
+                      {isDoubleElim && (
+                        <span style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+                          <FeederChips labels={roundChip1} title={roundChipTitle1} />
+                          <WbDropChips labels={roundWb1} title={roundWbTitle1} />
+                        </span>
+                      )}
                     </div>
                     <span style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>vs</span>
-                    <div style={{ padding: 14, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', color: s2 && s2 !== 'TBD' ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                      {isTeam && teamsToUse?.length ? <TeamSlot name={s2} teamId={m.team2_id} teams={teamsToUse} isTeam={true} /> : (s2 || 'Slot 2')}
+                    <div style={{ padding: 14, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', color: s2 && s2 !== 'TBD' ? 'var(--text-primary)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        {isTeam && teamsToUse?.length ? <TeamSlot name={s2} teamId={m.team2_id} teams={teamsToUse} isTeam={true} /> : (s2 || 'Slot 2')}
+                      </div>
+                      {isDoubleElim && (
+                        <span style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+                          <FeederChips labels={roundChip2} title={roundChipTitle2} />
+                          <WbDropChips labels={roundWb2} title={roundWbTitle2} />
+                        </span>
+                      )}
                     </div>
                   </>
                 ) : (
                   <>
-                <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teamsToUse} teamId={m.team1_id} isTeam={isTeam} isPreview={false} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} matchId={m.id} slot={1} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} onSetWinner={canEdit ? onSetWinner : null} hasOpponent={slot2Filled} canSetWinner={canSetWinner} canEdit={!!canEdit} hasBye={hasBye} />
+                <BracketBox name={s1} isWinner={w1} accentSide="left" teams={teamsToUse} teamId={m.team1_id} isTeam={isTeam} isPreview={false} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} matchId={m.id} slot={1} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} onSetWinner={canEdit ? onSetWinner : null} hasOpponent={slot2Filled} canSetWinner={canSetWinner} canEdit={!!canEdit} hasBye={hasBye} feederChipLabels={isDoubleElim ? roundChip1 : undefined} feederChipTitle={isDoubleElim ? roundChipTitle1 : undefined} wbDropChipLabels={isDoubleElim ? roundWb1 : undefined} wbDropChipTitle={isDoubleElim ? roundWbTitle1 : undefined} />
                 <span style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>vs</span>
-                <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teamsToUse} teamId={m.team2_id} isTeam={isTeam} isPreview={false} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} matchId={m.id} slot={2} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} onSetWinner={canEdit ? onSetWinner : null} hasOpponent={slot1Filled} canSetWinner={canSetWinner} canEdit={!!canEdit} hasBye={hasBye} />
+                <BracketBox name={s2} isWinner={w2} accentSide="left" teams={teamsToUse} teamId={m.team2_id} isTeam={isTeam} isPreview={false} onDrop={canEdit ? onUpdateMatch : null} onSwapSlots={canEdit ? onSwapSlots : null} matchId={m.id} slot={2} onAdvanceOpponent={canEdit ? onAdvanceOpponent : null} onSetWinner={canEdit ? onSetWinner : null} hasOpponent={slot1Filled} canSetWinner={canSetWinner} canEdit={!!canEdit} hasBye={hasBye} feederChipLabels={isDoubleElim ? roundChip2 : undefined} feederChipTitle={isDoubleElim ? roundChipTitle2 : undefined} wbDropChipLabels={isDoubleElim ? roundWb2 : undefined} wbDropChipTitle={isDoubleElim ? roundWbTitle2 : undefined} />
                   </>
+                )}
+                {roundAdvLine && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.35 }} title={roundAdvTitle}>
+                    {roundAdvLine}
+                  </div>
+                )}
+                {roundDropLine && (
+                  <div style={{ fontSize: 11, color: 'var(--accent)', lineHeight: 1.35 }} title={roundDropTitle}>
+                    {roundDropLine}
+                  </div>
                 )}
                 {m.winner_name && (
                   sectionLabel === 'Grand Finals' ? (
@@ -1705,11 +1947,11 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
         <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
           <div>
             <h3 style={{ margin: '0 0 16px', color: 'var(--accent)', fontSize: 16 }}>Winners Bracket</h3>
-            <BracketTree rounds={Object.fromEntries(Object.entries(wByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFooterLabel="Primary" onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
+            <BracketTree rounds={Object.fromEntries(Object.entries(wByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFooterLabel="Primary" matchById={matchById} incomingByParentSlot={incomingByParentSlot} wbDropByLosersSlot={wbDropByLosersSlot} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 24 }}>
             <h3 style={{ margin: '0 0 16px', color: 'var(--accent)', fontSize: 16 }}>Losers Bracket</h3>
-            <BracketTree rounds={Object.fromEntries(Object.entries(lByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFilter={() => true} roundDisplayOffset={-10} roundFooterLabel="Losers" onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
+            <BracketTree rounds={Object.fromEntries(Object.entries(lByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFilter={() => true} roundDisplayOffset={-10} roundFooterLabel="Losers" matchById={matchById} incomingByParentSlot={incomingByParentSlot} wbDropByLosersSlot={wbDropByLosersSlot} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
           </div>
           {bySection.grand_finals.length > 0 && (
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 24 }}>

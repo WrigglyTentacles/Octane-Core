@@ -124,6 +124,8 @@ async def get_bracket(
                 "bracket_section": m.bracket_section or "winners",
                 "parent_match_id": m.parent_match_id,
                 "parent_match_slot": m.parent_match_slot,
+                "loser_advances_to_match_id": m.loser_advances_to_match_id,
+                "loser_advances_to_slot": m.loser_advances_to_slot,
                 "team1_id": m.team1_id,
                 "team2_id": m.team2_id,
                 "player1_id": _id_for_json(m.player1_id),
