@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useLayoutEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { useGuild } from './GuildContext';
@@ -1231,14 +1231,104 @@ function WbDropChips({ labels, title }) {
   );
 }
 
+/** Classic elbow connectors between adjacent bracket columns (pixel coords in grid box). */
+function buildBracketConnectorPaths(
+  roundEntries,
+  rows,
+  matchById,
+  gridInnerW,
+  cols,
+  rowH,
+  gapRow,
+  gapCol
+) {
+  if (gridInnerW < 8 || cols < 2 || !roundEntries.length) return [];
+  const trackW = (gridInnerW - (cols - 1) * gapCol) / cols;
+  const leftEdge = (c) => c * (trackW + gapCol);
+  const rightEdge = (c) => leftEdge(c) + trackW;
+  const yMid = (i, rowSpan) => {
+    const a = i * rowSpan;
+    const top = a * (rowH + gapRow);
+    const bottom = (a + rowSpan - 1) * (rowH + gapRow) + rowH;
+    return (top + bottom) / 2;
+  };
+  const paths = [];
+  for (let c = 0; c < roundEntries.length - 1; c += 1) {
+    const matches = roundEntries[c][1];
+    const nextMatches = roundEntries[c + 1][1];
+    const rowSpan = Math.max(1, Math.floor(rows / matches.length));
+    const pRowSpan = Math.max(1, Math.floor(rows / nextMatches.length));
+    matches.forEach((m, i) => {
+      const parent = resolveMatchById(matchById, m.parent_match_id);
+      if (!parent) return;
+      const pi = nextMatches.findIndex((p) => String(p.id) === String(parent.id));
+      if (pi < 0) return;
+      const y1 = yMid(i, rowSpan);
+      const y2 = yMid(pi, pRowSpan);
+      const x1 = rightEdge(c) - 4;
+      const x2 = leftEdge(c + 1) + 4;
+      const xm = (rightEdge(c) + leftEdge(c + 1)) / 2;
+      const d = `M ${x1} ${y1} L ${xm} ${y1} L ${xm} ${y2} L ${x2} ${y2}`;
+      paths.push({ d, key: `conn-${m.id}-to-${parent.id}` });
+    });
+  }
+  return paths;
+}
+
+/** Row height must fit two slots + advancement copy + optional winner bar without clipping. */
+const BRACKET_TREE_ROW_H = 128;
+const BRACKET_TREE_GAP_ROW = 16;
+const BRACKET_TREE_GAP_COL = 22;
+
 function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSlots, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, roundFilter, roundDisplayOffset = 0, roundFooterLabel = 'Round', matchById = {}, incomingByParentSlot = {}, wbDropByLosersSlot = {} }) {
   const filter = roundFilter ?? ((k) => Number(k) < 10);
-  const roundEntries = Object.entries(rounds || {}).filter(([k]) => filter(k)).sort((a, b) => Number(a[0]) - Number(b[0]));
-  if (roundEntries.length === 0) return <p style={{ color: 'var(--text-muted)', padding: 24 }}>No matches to display.</p>;
+  const roundEntries = useMemo(() => {
+    const f = roundFilter ?? ((k) => Number(k) < 10);
+    return Object.entries(rounds || {})
+      .filter(([k]) => f(k))
+      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .map(([k, arr]) => [k, [...arr].sort((a, b) => (a.match_num || 0) - (b.match_num || 0))]);
+  }, [rounds, roundFilter]);
 
-  const firstRoundMatches = roundEntries[0][1].length;
+  const gridRef = useRef(null);
+  const [gridInnerW, setGridInnerW] = useState(0);
+
+  const firstRoundMatches = roundEntries[0]?.[1]?.length ?? 0;
   const totalRows = Math.max(firstRoundMatches * 2, 4);
-  const rowHeight = 90;
+  const rowHeight = BRACKET_TREE_ROW_H;
+
+  useLayoutEffect(() => {
+    const el = gridRef.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver(() => {
+      setGridInnerW(el.clientWidth);
+    });
+    ro.observe(el);
+    setGridInnerW(el.clientWidth);
+    return () => ro.disconnect();
+  }, [rounds, roundFilter, totalRows, roundEntries.length]);
+
+  const cols = roundEntries.length;
+  const gridTotalH = totalRows * BRACKET_TREE_ROW_H + (totalRows - 1) * BRACKET_TREE_GAP_ROW;
+
+  const connectorPaths = useMemo(
+    () =>
+      buildBracketConnectorPaths(
+        roundEntries,
+        totalRows,
+        matchById,
+        gridInnerW,
+        cols,
+        BRACKET_TREE_ROW_H,
+        BRACKET_TREE_GAP_ROW,
+        BRACKET_TREE_GAP_COL
+      ),
+    [roundEntries, totalRows, matchById, gridInnerW, cols]
+  );
+
+  if (roundEntries.length === 0) {
+    return <p style={{ color: 'var(--text-muted)', padding: 24 }}>No matches to display.</p>;
+  }
 
   const renderSlot = (m, slot, s, teamId) => (
     <div
@@ -1300,7 +1390,7 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'center',
-          minHeight: rowSpan * 56,
+          width: '100%',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
@@ -1311,6 +1401,7 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
               padding: 12,
               border: '1px solid var(--border)',
               position: 'relative',
+              zIndex: 1,
               flex: 1,
               display: 'flex',
               flexDirection: 'column',
@@ -1368,20 +1459,20 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
     );
   };
 
-  const cols = roundEntries.length;
-  const rows = totalRows;
   const gridStyle = {
     display: 'grid',
     gridTemplateColumns: roundEntries.map(() => 'minmax(220px, 1fr)').join(' '),
-    gridTemplateRows: `repeat(${rows}, ${rowHeight}px)`,
-    gap: '8px 24px',
-    alignItems: 'start',
+    gridTemplateRows: `repeat(${totalRows}, ${rowHeight}px)`,
+    gap: `${BRACKET_TREE_GAP_ROW}px ${BRACKET_TREE_GAP_COL}px`,
+    alignItems: 'center',
     position: 'relative',
+    zIndex: 1,
+    minHeight: gridTotalH,
   };
 
   const cells = [];
   roundEntries.forEach(([roundNum, matches], colIdx) => {
-    const rowSpan = Math.max(1, Math.floor(rows / matches.length));
+    const rowSpan = Math.max(1, Math.floor(totalRows / matches.length));
     matches.forEach((m, i) => {
       const r = i * rowSpan;
       cells.push(
@@ -1393,11 +1484,11 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            minHeight: rowSpan * rowHeight,
-            padding: '4px 0',
+            padding: `${BRACKET_TREE_GAP_ROW / 2}px 0`,
+            boxSizing: 'border-box',
           }}
         >
-          <div style={{ width: '100%' }}>{renderMatch(m, rowSpan, colIdx)}</div>
+          <div style={{ width: '100%', maxWidth: '100%' }}>{renderMatch(m, rowSpan, colIdx)}</div>
         </div>
       );
     });
@@ -1405,8 +1496,38 @@ function BracketTree({ rounds, isTeam, teams, isPreview, onUpdateMatch, onSwapSl
 
   return (
     <div style={{ overflowX: 'auto', paddingBottom: 24, minHeight: 200 }}>
-      <div style={{ ...gridStyle, minWidth: cols * 240, padding: 16 }}>
-        {cells}
+      <div style={{ position: 'relative', minWidth: cols * 240, padding: 16 }}>
+        {gridInnerW > 0 && connectorPaths.length > 0 ? (
+          <svg
+            width={gridInnerW}
+            height={gridTotalH}
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              pointerEvents: 'none',
+              zIndex: 0,
+              overflow: 'visible',
+            }}
+            aria-hidden
+          >
+            {connectorPaths.map(({ d, key }) => (
+              <path
+                key={key}
+                d={d}
+                fill="none"
+                stroke="var(--border)"
+                strokeWidth={1.75}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity={0.9}
+              />
+            ))}
+          </svg>
+        ) : null}
+        <div ref={gridRef} style={{ ...gridStyle, minWidth: cols * 240 }}>
+          {cells}
+        </div>
       </div>
       <div style={{ display: 'flex', gap: 24, marginTop: 12, fontSize: 12, color: 'var(--text-muted)' }}>
         {roundEntries.map(([r], i) => (
@@ -1761,9 +1882,18 @@ function BracketSummary({ summary, bracket, isTeam, compact }) {
   );
 }
 
+const LOSERS_ZOOM_MIN = 0.5;
+const LOSERS_ZOOM_MAX = 2;
+const LOSERS_ZOOM_STEP = 0.1;
+
+function bracketSupportsCssZoom() {
+  return typeof document !== 'undefined' && 'zoom' in document.documentElement.style;
+}
+
 function BracketView({ bracket, tournament, teams, participants, standby, onUpdateMatch, onAdvanceOpponent, onSetWinner, onSwapWinner, onClearWinner, onSwapSlots, isPreview, canEdit }) {
   const isTeam = tournament?.format !== '1v1';
   const teamsToUse = (bracket?.teams && bracket.teams.length > 0) ? bracket.teams : (teams || []);
+  const [losersBracketZoom, setLosersBracketZoom] = useState(1);
 
   const rawRounds = bracket?.rounds || {};
   const rounds = enrichRoundsWithInferredWinners(rawRounds, bracket?.bracket_type);
@@ -1950,8 +2080,131 @@ function BracketView({ bracket, tournament, teams, participants, standby, onUpda
             <BracketTree rounds={Object.fromEntries(Object.entries(wByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFooterLabel="Primary" matchById={matchById} incomingByParentSlot={incomingByParentSlot} wbDropByLosersSlot={wbDropByLosersSlot} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 24 }}>
-            <h3 style={{ margin: '0 0 16px', color: 'var(--accent)', fontSize: 16 }}>Losers Bracket</h3>
-            <BracketTree rounds={Object.fromEntries(Object.entries(lByRound).sort((a, b) => a[0] - b[0]))} isTeam={isTeam} teams={teamsToUse} isPreview={isPreview} roundFilter={() => true} roundDisplayOffset={-10} roundFooterLabel="Losers" matchById={matchById} incomingByParentSlot={incomingByParentSlot} wbDropByLosersSlot={wbDropByLosersSlot} onUpdateMatch={onUpdateMatch} onSwapSlots={onSwapSlots} onAdvanceOpponent={onAdvanceOpponent} onSetWinner={onSetWinner} onSwapWinner={onSwapWinner} onClearWinner={onClearWinner} />
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                marginBottom: 16,
+              }}
+            >
+              <h3 style={{ margin: 0, color: 'var(--accent)', fontSize: 16 }}>Losers Bracket</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Zoom</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLosersBracketZoom((z) =>
+                      Math.max(LOSERS_ZOOM_MIN, Math.round((z - LOSERS_ZOOM_STEP) * 100) / 100)
+                    )
+                  }
+                  disabled={losersBracketZoom <= LOSERS_ZOOM_MIN}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 14,
+                    lineHeight: 1,
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    background: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    cursor: losersBracketZoom <= LOSERS_ZOOM_MIN ? 'not-allowed' : 'pointer',
+                    opacity: losersBracketZoom <= LOSERS_ZOOM_MIN ? 0.45 : 1,
+                  }}
+                  title="Zoom out"
+                >
+                  −
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)', minWidth: 44, textAlign: 'center' }}>
+                  {Math.round(losersBracketZoom * 100)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLosersBracketZoom((z) =>
+                      Math.min(LOSERS_ZOOM_MAX, Math.round((z + LOSERS_ZOOM_STEP) * 100) / 100)
+                    )
+                  }
+                  disabled={losersBracketZoom >= LOSERS_ZOOM_MAX}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 14,
+                    lineHeight: 1,
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    background: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    cursor: losersBracketZoom >= LOSERS_ZOOM_MAX ? 'not-allowed' : 'pointer',
+                    opacity: losersBracketZoom >= LOSERS_ZOOM_MAX ? 0.45 : 1,
+                  }}
+                  title="Zoom in"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLosersBracketZoom(1)}
+                  disabled={losersBracketZoom === 1}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 12,
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    background: 'var(--bg-tertiary)',
+                    color: 'var(--text-muted)',
+                    cursor: losersBracketZoom === 1 ? 'default' : 'pointer',
+                    opacity: losersBracketZoom === 1 ? 0.5 : 1,
+                  }}
+                  title="Reset zoom to 100%"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+            <div
+              style={{
+                overflow: 'auto',
+                maxWidth: '100%',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)',
+                padding: 8,
+                background: 'var(--bg-primary)',
+              }}
+            >
+              <div
+                style={
+                  losersBracketZoom === 1
+                    ? undefined
+                    : bracketSupportsCssZoom()
+                      ? { zoom: losersBracketZoom }
+                      : {
+                          transform: `scale(${losersBracketZoom})`,
+                          transformOrigin: 'top left',
+                          width: `${100 / losersBracketZoom}%`,
+                        }
+                }
+              >
+                <BracketTree
+                  rounds={Object.fromEntries(Object.entries(lByRound).sort((a, b) => a[0] - b[0]))}
+                  isTeam={isTeam}
+                  teams={teamsToUse}
+                  isPreview={isPreview}
+                  roundFilter={() => true}
+                  roundDisplayOffset={-10}
+                  roundFooterLabel="Losers"
+                  matchById={matchById}
+                  incomingByParentSlot={incomingByParentSlot}
+                  wbDropByLosersSlot={wbDropByLosersSlot}
+                  onUpdateMatch={onUpdateMatch}
+                  onSwapSlots={onSwapSlots}
+                  onAdvanceOpponent={onAdvanceOpponent}
+                  onSetWinner={onSetWinner}
+                  onSwapWinner={onSwapWinner}
+                  onClearWinner={onClearWinner}
+                />
+              </div>
+            </div>
           </div>
           {bySection.grand_finals.length > 0 && (
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 24 }}>
